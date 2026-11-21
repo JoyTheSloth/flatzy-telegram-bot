@@ -2,12 +2,16 @@ import { Telegraf, Markup } from 'telegraf';
 import { createClient } from '@supabase/supabase-js';
 import http from 'http';
 import dotenv from 'dotenv';
+import nodemailer from 'nodemailer';
+import cron from 'node-cron';
 
 dotenv.config();
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const EMAIL_USER = process.env.EMAIL_USER || 'flatzykolkata@gmail.com';
+const EMAIL_PASS = process.env.EMAIL_PASS || 'flatzy@04';
 
 if (!BOT_TOKEN || BOT_TOKEN === 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
   console.error('\n⚠️ TELEGRAM_BOT_TOKEN is missing or not set in .env!\n');
@@ -680,6 +684,124 @@ async function handleFinishSubmission(ctx, session) {
     sendTracked(ctx, '⚠️ An unexpected error occurred. Please try again later.');
   }
 }
+
+// -------------------------------------------------------------
+// WEEKLY INQUIRIES EMAIL REPORT AUTOMATION (Mondays at 09:00 AM IST)
+// -------------------------------------------------------------
+async function sendWeeklyInquiriesReport() {
+  console.log('📧 Running scheduled weekly inquiries email report...');
+  try {
+    const { data: inquiries, error } = await supabase
+      .from('inquiries')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[Supabase Inquiries Fetch Error]:', error);
+      return;
+    }
+
+    const leadList = inquiries || [];
+    const totalCount = leadList.length;
+    const hotCount = leadList.filter(l => l.is_hot).length;
+
+    // Generate HTML Table Rows
+    const rowsHtml = leadList.map((lead, idx) => `
+      <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
+        <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: bold; color: #1e293b;">${idx + 1}</td>
+        <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: bold; color: #0284c7;">${lead.name || 'Anonymous'}</td>
+        <td style="padding: 10px; border: 1px solid #e2e8f0; color: #334155;">${lead.phone || 'N/A'}</td>
+        <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: bold; color: #7c3aed;">${lead.bhk || 'N/A'}</td>
+        <td style="padding: 10px; border: 1px solid #e2e8f0; color: #334155;">${lead.location || 'Kolkata'}</td>
+        <td style="padding: 10px; border: 1px solid #e2e8f0; color: #16a34a; font-weight: bold;">${lead.budget || 'N/A'}</td>
+        <td style="padding: 10px; border: 1px solid #e2e8f0;">
+          <span style="display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; background: ${lead.status === 'Closed' ? '#dcfce7; color: #166534' : '#fef3c7; color: #92400e'};">
+            ${lead.status || 'Active Lead'}
+          </span>
+        </td>
+        <td style="padding: 10px; border: 1px solid #e2e8f0; color: #64748b; font-size: 12px;">${lead.created_at ? new Date(lead.created_at).toLocaleDateString('en-IN') : 'Recent'}</td>
+      </tr>
+    `).join('');
+
+    const emailHtml = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background-color: #f1f5f9; color: #0f172a;">
+        <div style="background: linear-gradient(135deg, #0284c7, #2563eb); border-radius: 16px; padding: 24px; color: white; margin-bottom: 20px;">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 900;">Flatzy Kolkata — Weekly Inquiries Report</h1>
+          <p style="margin: 6px 0 0 0; font-size: 14px; opacity: 0.9;">Automated summary of all tenant, buyer & broker leads collected.</p>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px;">
+          <div style="background: white; border-radius: 12px; padding: 16px; border: 1px solid #e2e8f0;">
+            <div style="font-size: 12px; font-weight: bold; color: #64748b; text-transform: uppercase;">Total Leads Captured</div>
+            <div style="font-size: 28px; font-weight: 900; color: #0284c7; margin-top: 4px;">${totalCount}</div>
+          </div>
+          <div style="background: white; border-radius: 12px; padding: 16px; border: 1px solid #e2e8f0;">
+            <div style="font-size: 12px; font-weight: bold; color: #64748b; text-transform: uppercase;">Priority / Hot Leads</div>
+            <div style="font-size: 28px; font-weight: 900; color: #ea580c; margin-top: 4px;">${hotCount}</div>
+          </div>
+        </div>
+
+        <div style="background: white; border-radius: 16px; padding: 20px; border: 1px solid #e2e8f0; overflow-x: auto;">
+          <h3 style="margin: 0 0 15px 0; font-size: 16px; font-weight: 800; color: #1e293b;">📋 Complete Leads Directory Table</h3>
+          <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
+            <thead>
+              <tr style="background-color: #0f172a; color: white;">
+                <th style="padding: 10px; border: 1px solid #0f172a;">#</th>
+                <th style="padding: 10px; border: 1px solid #0f172a;">Name</th>
+                <th style="padding: 10px; border: 1px solid #0f172a;">Phone</th>
+                <th style="padding: 10px; border: 1px solid #0f172a;">Requirement</th>
+                <th style="padding: 10px; border: 1px solid #0f172a;">Location</th>
+                <th style="padding: 10px; border: 1px solid #0f172a;">Budget</th>
+                <th style="padding: 10px; border: 1px solid #0f172a;">Status</th>
+                <th style="padding: 10px; border: 1px solid #0f172a;">Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml || '<tr><td colspan="8" style="padding: 15px; text-align: center; color: #64748b;">No inquiries recorded yet.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+
+        <div style="text-align: center; margin-top: 24px; font-size: 12px; color: #64748b;">
+          This report was automatically compiled by Flatzy Automation System.<br/>
+          Visit your <a href="https://flatzy.vercel.app" style="color: #0284c7; font-weight: bold; text-decoration: none;">Flatzy Portal</a> to manage inquiries.
+        </div>
+      </div>
+    `;
+
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: EMAIL_USER,
+        pass: EMAIL_PASS
+      }
+    });
+
+    const mailOptions = {
+      from: `"Flatzy Kolkata" <${EMAIL_USER}>`,
+      to: EMAIL_USER,
+      subject: `📊 [Flatzy Weekly Report] Total Enquired Leads: ${totalCount} (${new Date().toLocaleDateString('en-IN')})`,
+      html: emailHtml
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`✅ Weekly inquiries email sent successfully to ${EMAIL_USER}:`, info.messageId);
+  } catch (err) {
+    console.error('❌ Error sending weekly inquiries email report:', err);
+  }
+}
+
+// Schedule: Every Monday at 09:00 AM (0 9 * * 1)
+cron.schedule('0 9 * * 1', () => {
+  sendWeeklyInquiriesReport();
+});
+
+// Also trigger an immediate test report when /emailreport is called by admin
+bot.command('emailreport', async (ctx) => {
+  await ctx.reply('⏳ Generating and dispatching weekly inquiries email report to flatzykolkata@gmail.com...');
+  await sendWeeklyInquiriesReport();
+  await ctx.reply('✅ Inquiries table report has been dispatched to flatzykolkata@gmail.com!');
+});
 
 // -------------------------------------------------------------
 // HTTP HEALTH CHECK SERVER (Required by Render Web Services)
