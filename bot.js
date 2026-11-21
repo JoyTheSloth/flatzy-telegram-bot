@@ -646,7 +646,7 @@ async function handleFinishSubmission(ctx, session) {
     broker_name: session.userName || 'Broker Partner',
     broker_phone: session.userPhone || '',
     images: session.images,   // ONLY images uploaded by the broker!
-    description: `Submitted via Flatzy Telegram Bot by ${session.userName}. Contact: ${session.userPhone}.`,
+    description: `Submitted via Flatzy Telegram Bot by ${session.userName}. Contact: ${session.userPhone}. [tg_chat_id:${ctx.from.id}]`,
     created_at: new Date().toISOString()
   };
 
@@ -802,6 +802,69 @@ bot.command('emailreport', async (ctx) => {
   await sendWeeklyInquiriesReport();
   await ctx.reply('✅ Inquiries table report has been dispatched to flatzykolkata@gmail.com!');
 });
+
+// -------------------------------------------------------------
+// REALTIME SUPABASE LISTENER: AUTO-NOTIFY BROKER ON TELEGRAM WHEN APPROVED
+// -------------------------------------------------------------
+try {
+  supabase
+    .channel('properties-approval-notifications')
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'properties'
+      },
+      async (payload) => {
+        try {
+          const oldRecord = payload.old;
+          const newRecord = payload.new;
+
+          // Check if property transitioned from pending to available / approved
+          const wasPending = oldRecord && (oldRecord.status === 'pending' || !oldRecord.is_verified);
+          const isNowApproved = newRecord && newRecord.status === 'available' && newRecord.is_verified === true;
+
+          if (isNowApproved && wasPending) {
+            // Extract Telegram Chat ID from description
+            const match = (newRecord.description || '').match(/\[tg_chat_id:(\d+)\]/);
+            if (match && match[1]) {
+              const brokerChatId = match[1];
+              const title = newRecord.title || 'Your Flat';
+              const price = newRecord.price ? `₹${Number(newRecord.price).toLocaleString('en-IN')}` : '';
+
+              console.log(`📢 Dispatching approval notification to Telegram Chat ID: ${brokerChatId}`);
+
+              await bot.telegram.sendMessage(
+                brokerChatId,
+                `🎉 *CONGRATULATIONS! YOUR FLAT IS APPROVED & LIVE!* 🚀\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `📌 *Property:* ${title}\n` +
+                `💰 *Price:* ${price}\n` +
+                `📍 *Location:* ${newRecord.location || 'Kolkata'}\n` +
+                `✅ *Status:* **Live & Verified on flatzy.in**\n\n` +
+                `Our tenant lead matching system is now actively connecting clients looking for this flat to you. You will receive direct inquiries!\n\n` +
+                `Thank you for being a valued Flatzy partner! 🤝`,
+                {
+                  parse_mode: 'Markdown',
+                  ...Markup.inlineKeyboard([
+                    [Markup.button.callback('🏢 Submit Another Flat', 'menu_list_flat')],
+                    [Markup.button.callback('🔙 Main Menu', 'menu_main')]
+                  ])
+                }
+              );
+            }
+          }
+        } catch (notifErr) {
+          console.error('Error sending Telegram approval notification:', notifErr);
+        }
+      }
+    )
+    .subscribe();
+  console.log('⚡ Supabase Realtime Approval Listener initialized.');
+} catch (rtErr) {
+  console.warn('Realtime listener subscription warning:', rtErr.message);
+}
 
 // -------------------------------------------------------------
 // HTTP HEALTH CHECK SERVER (Required by Render Web Services)
