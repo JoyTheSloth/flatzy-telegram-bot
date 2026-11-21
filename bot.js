@@ -10,8 +10,9 @@ dotenv.config();
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-const EMAIL_USER = process.env.EMAIL_USER || 'flatzykolkata@gmail.com';
-const EMAIL_PASS = process.env.EMAIL_PASS || 'flatzy@04';
+const EMAIL_USER = process.env.EMAIL_USER || 'joydeepsuper50@gmail.com';
+const EMAIL_PASS = process.env.EMAIL_PASS || 'qfzo mkom xklv thsk';
+const ADMIN_NOTIFICATION_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL || 'joydeepdasofficial2003@gmail.com';
 
 if (!BOT_TOKEN || BOT_TOKEN === 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
   console.error('\n⚠️ TELEGRAM_BOT_TOKEN is missing or not set in .env!\n');
@@ -632,18 +633,18 @@ async function sendAdminAlertEmail({ type, title, brokerName, brokerPhone, locat
         </div>
 
         <div style="text-align: center; font-size: 11px; color: #64748b; border-top: 1px solid #1e293b; padding-top: 16px;">
-          Instant notification dispatched to flatzykolkata@gmail.com
+          Instant notification dispatched to ${ADMIN_NOTIFICATION_EMAIL}
         </div>
       </div>
     `;
 
     await transporter.sendMail({
       from: `"Flatzy Alerts" <${EMAIL_USER}>`,
-      to: EMAIL_USER,
+      to: ADMIN_NOTIFICATION_EMAIL,
       subject: subject,
       html: html
     });
-    console.log(`📨 Instant Admin Email Alert sent to ${EMAIL_USER} for ${type}`);
+    console.log(`📨 Instant Admin Email Alert sent to ${ADMIN_NOTIFICATION_EMAIL} for ${type}`);
   } catch (err) {
     console.warn('⚠️ Could not send instant admin alert email:', err.message);
   }
@@ -686,7 +687,7 @@ async function sendDailyDatabaseBackup() {
 
     await transporter.sendMail({
       from: `"Flatzy Backups" <${EMAIL_USER}>`,
-      to: EMAIL_USER,
+      to: ADMIN_NOTIFICATION_EMAIL,
       subject: `💾 [Flatzy Daily Backup] Database CSV Export (${todayStr})`,
       html: `
         <div style="font-family: sans-serif; padding: 20px; color: #1e293b;">
@@ -713,7 +714,7 @@ async function sendDailyDatabaseBackup() {
       ]
     });
 
-    console.log(`✅ Daily database backup CSV sent successfully to ${EMAIL_USER}`);
+    console.log(`✅ Daily database backup CSV sent successfully to ${ADMIN_NOTIFICATION_EMAIL}`);
   } catch (backupErr) {
     console.error('❌ Error sending daily database backup:', backupErr);
   }
@@ -726,9 +727,9 @@ cron.schedule('59 23 * * *', () => {
 
 // Admin manual backup trigger
 bot.command('backup', async (ctx) => {
-  await ctx.reply('⏳ Creating full database CSV backup and sending to flatzykolkata@gmail.com...');
+  await ctx.reply(`⏳ Creating full database CSV backup and sending to ${ADMIN_NOTIFICATION_EMAIL}...`);
   await sendDailyDatabaseBackup();
-  await ctx.reply('✅ Database CSV backup files have been dispatched to flatzykolkata@gmail.com!');
+  await ctx.reply(`✅ Database CSV backup files have been dispatched to ${ADMIN_NOTIFICATION_EMAIL}!`);
 });
 
 // -------------------------------------------------------------
@@ -976,13 +977,13 @@ async function sendWeeklyInquiriesReport() {
 
     const mailOptions = {
       from: `"Flatzy Kolkata" <${EMAIL_USER}>`,
-      to: EMAIL_USER,
+      to: ADMIN_NOTIFICATION_EMAIL,
       subject: `📊 [Flatzy Weekly Report] Total Enquired Leads: ${totalCount} (${new Date().toLocaleDateString('en-IN')})`,
       html: emailHtml
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Weekly inquiries email sent successfully to ${EMAIL_USER}:`, info.messageId);
+    console.log(`✅ Weekly inquiries email sent successfully to ${ADMIN_NOTIFICATION_EMAIL}:`, info.messageId);
   } catch (err) {
     console.error('❌ Error sending weekly inquiries email report:', err);
   }
@@ -995,9 +996,9 @@ cron.schedule('0 9 * * 1', () => {
 
 // Also trigger an immediate test report when /emailreport is called by admin
 bot.command('emailreport', async (ctx) => {
-  await ctx.reply('⏳ Generating and dispatching weekly inquiries email report to flatzykolkata@gmail.com...');
+  await ctx.reply(`⏳ Generating and dispatching weekly inquiries email report to ${ADMIN_NOTIFICATION_EMAIL}...`);
   await sendWeeklyInquiriesReport();
-  await ctx.reply('✅ Inquiries table report has been dispatched to flatzykolkata@gmail.com!');
+  await ctx.reply(`✅ Inquiries table report has been dispatched to ${ADMIN_NOTIFICATION_EMAIL}!`);
 });
 
 // -------------------------------------------------------------
