@@ -10,8 +10,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
 if (!BOT_TOKEN || BOT_TOKEN === 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
-  console.error('\n⚠️ TELEGRAM_BOT_TOKEN is missing or not set in .env!');
-  console.error('Please get a token from @BotFather on Telegram, paste it into .env, and restart.\n');
+  console.error('\n⚠️ TELEGRAM_BOT_TOKEN is missing or not set in .env!\n');
   process.exit(1);
 }
 
@@ -23,14 +22,13 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const bot = new Telegraf(BOT_TOKEN);
 
-// User in-memory session store with 3-Day Auto-Expiry
+// User in-memory session store with 3-Day Auto-Expiry & Message Tracking
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const sessions = new Map();
 
 function getSession(userId) {
   const existing = sessions.get(userId);
   if (existing) {
-    // Check if session has expired (older than 3 days)
     if (Date.now() - existing.lastActivity > THREE_DAYS_MS) {
       sessions.delete(userId);
     } else {
@@ -41,6 +39,7 @@ function getSession(userId) {
 
   const newSession = {
     step: 'IDLE',
+    // Property listing fields
     listingType: 'rent',
     bhk: '2 BHK',
     location: 'New Town',
@@ -51,6 +50,13 @@ function getSession(userId) {
     userPhone: '',
     images: [],
     description: '',
+    // Broker onboarding fields
+    brokerName: '',
+    brokerPhone: '',
+    aadhaarFront: '',
+    aadhaarBack: '',
+    // Metadata & history tracking
+    messageIds: [],
     createdAt: Date.now(),
     lastActivity: Date.now(),
     lastUploadAt: null
@@ -60,10 +66,30 @@ function getSession(userId) {
 }
 
 function resetSession(userId) {
-  sessions.delete(userId);
+  const existing = sessions.get(userId);
+  if (existing) {
+    existing.step = 'IDLE';
+    existing.images = [];
+    existing.price = 0;
+    existing.userName = '';
+    existing.userPhone = '';
+    existing.brokerName = '';
+    existing.brokerPhone = '';
+    existing.aadhaarFront = '';
+    existing.aadhaarBack = '';
+    existing.lastActivity = Date.now();
+  }
 }
 
-// Automatic hourly cleaner: sweeps and purges sessions older than 3 days
+// Helper to send a reply and track its message ID for the Clear command
+async function sendTracked(ctx, text, extra = {}) {
+  const msg = await ctx.reply(text, extra);
+  const session = getSession(ctx.from.id);
+  session.messageIds.push(msg.message_id);
+  return msg;
+}
+
+// Automatic hourly cleaner: purges sessions older than 3 days
 setInterval(() => {
   const now = Date.now();
   for (const [userId, session] of sessions.entries()) {
@@ -74,26 +100,181 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 // -------------------------------------------------------------
-// /cancel or /reset COMMAND
+// MAIN MENU / START COMMAND
 // -------------------------------------------------------------
-bot.command(['cancel', 'reset'], async (ctx) => {
-  resetSession(ctx.from.id);
-  await ctx.reply('🧹 *Session and upload history cleared!*\n\nType /start whenever you want to submit a new flat.', { parse_mode: 'Markdown' });
-});
-
-// -------------------------------------------------------------
-// /start COMMAND
-// -------------------------------------------------------------
-bot.command('start', async (ctx) => {
+async function showMainMenu(ctx) {
   const userId = ctx.from.id;
   resetSession(userId);
   const session = getSession(userId);
+  session.step = 'IDLE';
+
+  await sendTracked(
+    ctx,
+    `🏡 *Welcome to Flatzy Kolkata Official Assistant!*\n\n` +
+    `Flatzy helps you list verified flats and join Kolkata's premier broker network.\n\n` +
+    `👉 *What would you like to do?*`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('🏢 List a Flat (Rent / Resale)', 'menu_list_flat')],
+        [Markup.button.callback('🤝 How to Become a Flatzy Broker', 'menu_broker_info')],
+        [Markup.button.callback('🗑️ Clear Chat History', 'menu_clear_confirm')]
+      ])
+    }
+  );
+}
+
+bot.command('start', async (ctx) => {
+  const session = getSession(ctx.from.id);
+  if (ctx.message?.message_id) session.messageIds.push(ctx.message.message_id);
+  await showMainMenu(ctx);
+});
+
+bot.action('menu_main', async (ctx) => {
+  await ctx.answerCbQuery();
+  await showMainMenu(ctx);
+});
+
+// -------------------------------------------------------------
+// BROKER INSTRUCTIONS & ONBOARDING (Aadhaar KYC)
+// -------------------------------------------------------------
+async function showBrokerInstructions(ctx) {
+  await sendTracked(
+    ctx,
+    `🤝 *HOW TO BECOME A VERIFIED FLATZY BROKER*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `Join Kolkata’s most trusted real estate network. Flatzy connects you directly to verified tenants and buyers without spam.\n\n` +
+    `📋 *KYC Verification Requirements:*\n` +
+    `1️⃣ Your Full Name & Agency Name (if applicable)\n` +
+    `2️⃣ Active WhatsApp Phone Number\n` +
+    `3️⃣ Clear photos of your **Aadhaar Card**:\n` +
+    `   • 📸 **Front Side** (Showing photo & name)\n` +
+    `   • 📸 **Back Side** (Showing address)\n\n` +
+    `💼 *Broker Policy & Commission:*\n` +
+    `• **Commission:** Flatzy takes **20% of whatever the flat is priced at** upon closing the deal.\n` +
+    `• Verified broker badge on **flatzy.in**.\n` +
+    `• Access to high-intent leads in New Town, Salt Lake, Sector V, Rajarhat & Shapoorji.\n\n` +
+    `👉 *Ready to register as a Flatzy Partner Broker?*`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('📝 Apply Now as a Broker', 'broker_start_apply')],
+        [Markup.button.callback('🏢 List a Flat Instead', 'menu_list_flat')],
+        [Markup.button.callback('🔙 Back to Main Menu', 'menu_main')]
+      ])
+    }
+  );
+}
+
+bot.command('broker', async (ctx) => {
+  const session = getSession(ctx.from.id);
+  if (ctx.message?.message_id) session.messageIds.push(ctx.message.message_id);
+  await showBrokerInstructions(ctx);
+});
+
+bot.action('menu_broker_info', async (ctx) => {
+  await ctx.answerCbQuery();
+  await showBrokerInstructions(ctx);
+});
+
+// Broker Application Flow
+bot.action('broker_start_apply', async (ctx) => {
+  const userId = ctx.from.id;
+  const session = getSession(userId);
+  session.step = 'BROKER_NAME';
+
+  await ctx.answerCbQuery();
+  await sendTracked(
+    ctx,
+    `📝 *Broker Registration — Step 1 of 4*\n\n` +
+    `👉 *Please enter your Full Name and Agency Name:*\n` +
+    `_(Example: Rajesh Sharma, Greenline Realty)_`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// -------------------------------------------------------------
+// CLEAR CHAT WITH CONFIRMATION DIALOGUE BOX
+// -------------------------------------------------------------
+async function promptClearChat(ctx) {
+  await sendTracked(
+    ctx,
+    `⚠️ *Confirm Clear Chat*\n\n` +
+    `Are you sure you want to clear this entire conversation and wipe your session history?`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback('✅ Yes, Clear Everything', 'confirm_clear_yes'),
+          Markup.button.callback('❌ Cancel', 'confirm_clear_no')
+        ]
+      ])
+    }
+  );
+}
+
+bot.command(['clear', 'cancel', 'reset'], async (ctx) => {
+  const session = getSession(ctx.from.id);
+  if (ctx.message?.message_id) session.messageIds.push(ctx.message.message_id);
+  await promptClearChat(ctx);
+});
+
+bot.action('menu_clear_confirm', async (ctx) => {
+  await ctx.answerCbQuery();
+  await promptClearChat(ctx);
+});
+
+bot.action('confirm_clear_no', async (ctx) => {
+  await ctx.answerCbQuery();
+  try {
+    await ctx.deleteMessage();
+  } catch {}
+  await ctx.reply('Action cancelled. Type /start to return to the main menu.');
+});
+
+bot.action('confirm_clear_yes', async (ctx) => {
+  const userId = ctx.from.id;
+  const session = getSession(userId);
+  await ctx.answerCbQuery();
+
+  // Delete all tracked messages from this session
+  const idsToDelete = [...session.messageIds];
+  if (ctx.callbackQuery?.message?.message_id) {
+    idsToDelete.push(ctx.callbackQuery.message.message_id);
+  }
+
+  for (const msgId of idsToDelete) {
+    try {
+      await ctx.telegram.deleteMessage(ctx.chat.id, msgId);
+    } catch (e) {
+      // Ignored if message was already removed or expired
+    }
+  }
+
+  // Clear memory session completely
+  sessions.delete(userId);
+
+  // Send a fresh clean start message
+  await ctx.reply(
+    `✨ *Chat Cleared Successfully!*\n\n` +
+    `All your conversation history and draft details have been wiped clean.\n\n` +
+    `👉 Send /start whenever you want to begin again.`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// -------------------------------------------------------------
+// PROPERTY LISTING FLOW
+// -------------------------------------------------------------
+bot.action('menu_list_flat', async (ctx) => {
+  const userId = ctx.from.id;
+  const session = getSession(userId);
   session.step = 'SELECT_TYPE';
 
-  await ctx.reply(
-    `👋 *Welcome to Flatzy Kolkata Listing Assistant!*\n\n` +
-    `You can submit your flat for **Rent** or **Resale** directly from here.\n` +
-    `Once submitted, it will be reviewed by our admin team and posted live on the **flatzy.in** website.\n\n` +
+  await ctx.answerCbQuery();
+  await sendTracked(
+    ctx,
+    `🏢 *Post a Flat on Flatzy Kolkata*\n\n` +
     `👉 *Is your property for Rent or Resale?*`,
     {
       parse_mode: 'Markdown',
@@ -101,15 +282,13 @@ bot.command('start', async (ctx) => {
         [
           Markup.button.callback('🏢 For Rent', 'type_rent'),
           Markup.button.callback('🏷️ For Resale / Buy', 'type_sale')
-        ]
+        ],
+        [Markup.button.callback('🔙 Back to Main Menu', 'menu_main')]
       ])
     }
   );
 });
 
-// -------------------------------------------------------------
-// STEP 1: LISTING TYPE SELECTION
-// -------------------------------------------------------------
 bot.action(/type_(rent|sale)/, async (ctx) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
@@ -117,7 +296,8 @@ bot.action(/type_(rent|sale)/, async (ctx) => {
   session.step = 'SELECT_BHK';
 
   await ctx.answerCbQuery();
-  await ctx.reply(
+  await sendTracked(
+    ctx,
     `Great! Listing for *${session.listingType === 'rent' ? 'Rent' : 'Resale'}*.\n\n` +
     `👉 *Select property configuration:*`,
     {
@@ -136,9 +316,6 @@ bot.action(/type_(rent|sale)/, async (ctx) => {
   );
 });
 
-// -------------------------------------------------------------
-// STEP 2: BHK SELECTION
-// -------------------------------------------------------------
 bot.action(/bhk_(.+)/, async (ctx) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
@@ -146,7 +323,8 @@ bot.action(/bhk_(.+)/, async (ctx) => {
   session.step = 'SELECT_LOCATION';
 
   await ctx.answerCbQuery();
-  await ctx.reply(
+  await sendTracked(
+    ctx,
     `Selected: *${session.bhk}*.\n\n` +
     `👉 *Which area in Kolkata is the flat located in?*`,
     {
@@ -169,9 +347,6 @@ bot.action(/bhk_(.+)/, async (ctx) => {
   );
 });
 
-// -------------------------------------------------------------
-// STEP 3: LOCATION SELECTION
-// -------------------------------------------------------------
 bot.action(/loc_(.+)/, async (ctx) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
@@ -179,7 +354,8 @@ bot.action(/loc_(.+)/, async (ctx) => {
   session.step = 'SELECT_FURNISHING';
 
   await ctx.answerCbQuery();
-  await ctx.reply(
+  await sendTracked(
+    ctx,
     `Location: *${session.location}*.\n\n` +
     `👉 *Furnishing condition:*`,
     {
@@ -197,9 +373,6 @@ bot.action(/loc_(.+)/, async (ctx) => {
   );
 });
 
-// -------------------------------------------------------------
-// STEP 4: FURNISHING SELECTION
-// -------------------------------------------------------------
 bot.action(/furn_(.+)/, async (ctx) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
@@ -211,35 +384,65 @@ bot.action(/furn_(.+)/, async (ctx) => {
     ? `💰 *Expected Monthly Rent*\n\nEnter the asking rent in Rupees (e.g. \`22000\` or \`18500\`):`
     : `💰 *Expected Resale Price*\n\nEnter the selling price in Rupees (e.g. \`6500000\` for 65 Lakhs):`;
 
-  await ctx.reply(prompt, { parse_mode: 'Markdown' });
+  await sendTracked(ctx, prompt, { parse_mode: 'Markdown' });
 });
 
 // -------------------------------------------------------------
-// TEXT MESSAGE ROUTER (PRICE, CONTACT, DETAILS)
+// TEXT MESSAGE ROUTER (PRICE, CONTACT, BROKER DETAILS)
 // -------------------------------------------------------------
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
   const text = ctx.message.text.trim();
+  session.messageIds.push(ctx.message.message_id);
 
   // If user enters /done while on photo step
   if (text === '/done' && session.step === 'SEND_PHOTOS') {
     return handleFinishSubmission(ctx, session);
   }
 
-  // STEP: ENTER PRICE
+  // --- BROKER ONBOARDING STEPS ---
+  if (session.step === 'BROKER_NAME') {
+    session.brokerName = text;
+    session.step = 'BROKER_PHONE';
+    return sendTracked(
+      ctx,
+      `✅ Name saved: *${session.brokerName}*.\n\n` +
+      `📝 *Broker Registration — Step 2 of 4*\n\n` +
+      `👉 *Please enter your 10-digit WhatsApp Phone Number:*\n` +
+      `_(Example: 9830012345)_`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  if (session.step === 'BROKER_PHONE') {
+    const phoneMatch = text.match(/\d{10}/);
+    session.brokerPhone = phoneMatch ? phoneMatch[0] : text;
+    session.step = 'BROKER_AADHAAR_FRONT';
+
+    return sendTracked(
+      ctx,
+      `✅ Phone saved: *${session.brokerPhone}*.\n\n` +
+      `📸 *Broker Registration — Step 3 of 4*\n\n` +
+      `👉 *Please upload a clear photo of the FRONT side of your Aadhaar Card:*`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  // --- PROPERTY LISTING STEPS ---
   if (session.step === 'ENTER_PRICE') {
     const cleaned = text.replace(/[^0-9]/g, '');
     const price = parseInt(cleaned, 10);
 
     if (isNaN(price) || price <= 0) {
-      return ctx.reply('⚠️ Please enter a valid numerical amount (e.g. `20000` or `5500000`):', { parse_mode: 'Markdown' });
+      return sendTracked(ctx, '⚠️ Please enter a valid numerical amount (e.g. `20000` or `5500000`):', { parse_mode: 'Markdown' });
     }
 
     session.price = price;
     session.step = 'ENTER_CONTACT';
 
-    return ctx.reply(
+    return sendTracked(
+      ctx,
       `✅ Price saved: *₹${price.toLocaleString('en-IN')}*.\n\n` +
       `👉 *Please enter your Name and WhatsApp contact number:*\n` +
       `_(Example: Amit Roy, 9830012345)_`,
@@ -247,16 +450,14 @@ bot.on('text', async (ctx) => {
     );
   }
 
-  // STEP: ENTER CONTACT
   if (session.step === 'ENTER_CONTACT') {
     session.userName = text;
-    // Extract 10-digit number if present
     const phoneMatch = text.match(/\d{10}/);
     session.userPhone = phoneMatch ? phoneMatch[0] : text;
-
     session.step = 'SEND_PHOTOS';
 
-    return ctx.reply(
+    return sendTracked(
+      ctx,
       `✅ Contact saved: *${session.userName}*.\n\n` +
       `📸 *Now, please upload 1 to 5 photos of the flat.*\n\n` +
       `You can upload photos directly in this chat. When you are done uploading, click the button below or type **/done**.`,
@@ -271,20 +472,17 @@ bot.on('text', async (ctx) => {
 
   // Fallback
   if (session.step === 'IDLE') {
-    return ctx.reply('Type /start to list a flat on Flatzy!');
+    return showMainMenu(ctx);
   }
 });
 
 // -------------------------------------------------------------
-// PHOTO UPLOAD HANDLER
+// PHOTO UPLOAD ROUTER (PROPERTY PHOTOS & AADHAAR KYC)
 // -------------------------------------------------------------
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
-
-  if (session.step !== 'SEND_PHOTOS') {
-    session.step = 'SEND_PHOTOS';
-  }
+  if (ctx.message?.message_id) session.messageIds.push(ctx.message.message_id);
 
   try {
     const photos = ctx.message.photo;
@@ -292,9 +490,34 @@ bot.on('photo', async (ctx) => {
     const fileLink = await ctx.telegram.getFileLink(largestPhoto.file_id);
     const photoUrl = fileLink.href;
 
+    // 1. Handle Aadhaar Card Front
+    if (session.step === 'BROKER_AADHAAR_FRONT') {
+      session.aadhaarFront = photoUrl;
+      session.step = 'BROKER_AADHAAR_BACK';
+      return sendTracked(
+        ctx,
+        `✅ *Aadhaar Front Side Received!*\n\n` +
+        `📸 *Broker Registration — Step 4 of 4*\n\n` +
+        `👉 *Now please upload a clear photo of the BACK side of your Aadhaar Card:*`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    // 2. Handle Aadhaar Card Back & Complete Broker KYC
+    if (session.step === 'BROKER_AADHAAR_BACK') {
+      session.aadhaarBack = photoUrl;
+      return handleFinishBrokerKyc(ctx, session);
+    }
+
+    // 3. Handle Property Photos
+    if (session.step !== 'SEND_PHOTOS') {
+      session.step = 'SEND_PHOTOS';
+    }
+
     session.images.push(photoUrl);
 
-    await ctx.reply(
+    await sendTracked(
+      ctx,
       `📷 Photo ${session.images.length} received! Send more, or tap below when finished:`,
       {
         ...Markup.inlineKeyboard([
@@ -304,7 +527,7 @@ bot.on('photo', async (ctx) => {
     );
   } catch (err) {
     console.error('Error receiving photo:', err);
-    ctx.reply('⚠️ Could not save photo. Please try uploading again.');
+    sendTracked(ctx, '⚠️ Could not save photo. Please try uploading again.');
   }
 });
 
@@ -316,11 +539,67 @@ bot.action('finish_upload', async (ctx) => {
 });
 
 // -------------------------------------------------------------
-// SUBMIT TO SUPABASE & NOTIFY ADMIN
+// FINISH BROKER KYC SUBMISSION
+// -------------------------------------------------------------
+async function handleFinishBrokerKyc(ctx, session) {
+  const inquiryId = `broker_kyc_${Date.now()}`;
+
+  const kycPayload = {
+    id: inquiryId,
+    name: session.brokerName,
+    phone: session.brokerPhone,
+    bhk: 'Aadhaar Verified KYC',
+    property: 'Broker Partner Application',
+    location: 'Kolkata',
+    furnishing: 'Aadhaar Front & Back Uploaded',
+    budget: '20% Commission Policy Accepted',
+    shifting_date: 'Immediate Verification',
+    tenant_type: 'Broker Partner',
+    status: 'Active Lead',
+    is_hot: true,
+    last_follow_up: 'Aadhaar KYC Submitted via Telegram Bot',
+    assigned_broker_name: 'Flatzy Onboarding',
+    created_at: new Date().toISOString()
+  };
+
+  try {
+    const { error } = await supabase.from('inquiries').insert([kycPayload]);
+
+    if (error) {
+      console.warn('[Broker KYC Insert Warning]:', error.message);
+    }
+
+    await sendTracked(
+      ctx,
+      `🎉 *Broker Application Submitted Successfully!*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `👤 *Partner Name:* ${session.brokerName}\n` +
+      `📞 *WhatsApp Phone:* ${session.brokerPhone}\n` +
+      `🪪 *KYC Status:* Aadhaar Card Front & Back Received\n` +
+      `📜 *Policy:* 20% commission on deal closing\n\n` +
+      `Our onboarding manager will verify your Aadhaar details within 24 hours and contact you on WhatsApp.\n\n` +
+      `Welcome to the Flatzy Broker Family! 🤝`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('🏢 List a Flat', 'menu_list_flat')],
+          [Markup.button.callback('🔙 Main Menu', 'menu_main')]
+        ])
+      }
+    );
+
+    resetSession(ctx.from.id);
+  } catch (err) {
+    console.error('Error saving broker KYC:', err);
+    sendTracked(ctx, '⚠️ Error submitting your KYC. Please type /broker to try again.');
+  }
+}
+
+// -------------------------------------------------------------
+// FINISH PROPERTY LISTING SUBMISSION
 // -------------------------------------------------------------
 async function handleFinishSubmission(ctx, session) {
   if (session.images.length === 0) {
-    // Add default Kolkata curated placeholder if no images uploaded
     session.images.push('https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?auto=format&fit=crop&w=1200&q=80');
   }
 
@@ -341,8 +620,8 @@ async function handleFinishSubmission(ctx, session) {
     security_deposit: isRent ? Number(session.price) * 2 : 0,
     furnishing: session.furnishing,
     amenities: ['Lift', '24/7 Security', 'Power Backup', 'Water Supply'],
-    status: 'pending',        // <-- PENDING ADMIN APPROVAL!
-    is_verified: false,       // <-- PENDING VERIFICATION!
+    status: 'pending',        // PENDING ADMIN APPROVAL
+    is_verified: false,       // PENDING VERIFICATION
     broker_name: session.userName || 'Community User',
     broker_phone: session.userPhone || '',
     images: session.images,
@@ -355,11 +634,11 @@ async function handleFinishSubmission(ctx, session) {
 
     if (error) {
       console.error('[Supabase Insert Error]:', error);
-      return ctx.reply('⚠️ There was an error submitting your listing. Please try again with /start.');
+      return sendTracked(ctx, '⚠️ There was an error submitting your listing. Please try again with /start.');
     }
 
-    // Success response to user
-    await ctx.reply(
+    await sendTracked(
+      ctx,
       `🎉 *Listing Submitted Successfully!*\n\n` +
       `📌 *Summary:*\n` +
       `• *Property:* ${title}\n` +
@@ -368,17 +647,20 @@ async function handleFinishSubmission(ctx, session) {
       `• *Location:* ${session.location}\n` +
       `• *Photos:* ${session.images.length} uploaded\n\n` +
       `⏳ *Status:* **Pending Admin Review**\n\n` +
-      `Our team will review your photos and details in the **Flatzy Admin Portal**. As soon as it is approved, your flat will be live on **flatzy.in**! 🚀\n\n` +
-      `_Type /start anytime to submit another flat._`,
-      { parse_mode: 'Markdown' }
+      `Our team will review your photos and details in the **Flatzy Admin Portal**. As soon as it is approved, your flat will be live on **flatzy.in**! 🚀`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('🏢 Submit Another Flat', 'menu_list_flat')],
+          [Markup.button.callback('🔙 Main Menu', 'menu_main')]
+        ])
+      }
     );
 
-    // Reset session
     resetSession(ctx.from.id);
-
   } catch (err) {
     console.error('Fatal submission error:', err);
-    ctx.reply('⚠️ An unexpected error occurred. Please try again later.');
+    sendTracked(ctx, '⚠️ An unexpected error occurred. Please try again later.');
   }
 }
 
@@ -415,4 +697,3 @@ process.once('SIGTERM', () => {
   server.close();
   bot.stop('SIGTERM');
 });
-
