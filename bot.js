@@ -4,6 +4,7 @@ import http from 'http';
 import dotenv from 'dotenv';
 import nodemailer from 'nodemailer';
 import cron from 'node-cron';
+import Groq from 'groq-sdk';
 
 dotenv.config();
 
@@ -11,8 +12,11 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const EMAIL_USER = process.env.EMAIL_USER || 'joydeepsuper50@gmail.com';
-const EMAIL_PASS = process.env.EMAIL_PASS || 'qfzo mkom xklv thsk';
+const EMAIL_PASS = process.env.EMAIL_PASS;
 const ADMIN_NOTIFICATION_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL || 'joydeepdasofficial2003@gmail.com';
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+
+const groq = GROQ_API_KEY ? new Groq({ apiKey: GROQ_API_KEY }) : null;
 
 if (!BOT_TOKEN || BOT_TOKEN === 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
   console.error('\n⚠️ TELEGRAM_BOT_TOKEN is missing or not set in .env!\n');
@@ -106,6 +110,47 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 // -------------------------------------------------------------
+// GROQ AI ONE-SHOT LISTING PARSER
+// Converts raw messy broker text into structured property JSON
+// -------------------------------------------------------------
+async function parseListingWithGroqAI(rawText) {
+  try {
+    const systemPrompt = `You are an expert real estate data parser for Kolkata, India.
+Given an unstructured property listing from a broker or owner, parse it into JSON with these exact fields:
+{
+  "is_listing": true/false (true if this looks like a property listing, false if it is just a casual greeting),
+  "listingType": "rent" or "sale",
+  "bhk": "1 BHK", "2 BHK", "3 BHK", or "4+ BHK",
+  "location": Kolkata locality, strictly one of: "New Town", "Salt Lake", "Sector V", "Rajarhat", "Shapoorji", "Chinar Park", "Kestopur", "Baguiati", "Dum Dum", "EM Bypass", "Ruby", "Garia", "Bhowanipore", "Behala", "Howrah", or "Other",
+  "subLocation": string (e.g. Action Area 1, Near City Centre 2, Unitech, etc),
+  "price": number (monthly rent or total selling price in INR. E.g. "25k" -> 25000, "65 lakhs" -> 6500000, "1.2 cr" -> 12000000),
+  "furnishing": "Fully Furnished", "Semi Furnished", or "Unfurnished",
+  "sqft": number or null,
+  "userName": string or null (if contact name mentioned),
+  "userPhone": 10-digit phone number or null
+}
+Return ONLY valid JSON. No conversational text or markdown code blocks.`;
+
+    const completion = await groq.chat.completions.create({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: rawText }
+      ],
+      model: 'llama-3.3-70b-versatile',
+      temperature: 0.1,
+      response_format: { type: 'json_object' }
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    if (!content) return null;
+    return JSON.parse(content);
+  } catch (err) {
+    console.error('Groq AI parsing error:', err);
+    return null;
+  }
+}
+
+// -------------------------------------------------------------
 // MAIN MENU / START COMMAND
 // -------------------------------------------------------------
 async function showMainMenu(ctx) {
@@ -118,11 +163,12 @@ async function showMainMenu(ctx) {
     ctx,
     `🏡 *Welcome to Flatzy Kolkata Official Assistant!*\n\n` +
     `Flatzy helps you list verified flats and join Kolkata's premier broker network.\n\n` +
+    `💡 *Pro Tip:* You can also **paste a raw WhatsApp property message** directly into this chat anytime, and our AI will automatically parse it!\n\n` +
     `👉 *What would you like to do?*`,
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('🏢 List a Flat (Rent / Resale)', 'menu_list_flat')],
+        [Markup.button.callback('🏢 List a Flat (Step-by-Step)', 'menu_list_flat')],
         [Markup.button.callback('🤝 How to Become a Flatzy Broker', 'menu_broker_info')],
         [Markup.button.callback('🗑️ Clear Chat History', 'menu_clear_confirm')]
       ])
@@ -474,8 +520,48 @@ bot.on('text', async (ctx) => {
     );
   }
 
-  // Fallback
+  // Fallback: If user sends raw text when IDLE, try Groq AI One-Shot Parsing!
   if (session.step === 'IDLE') {
+    // If text has some length, attempt AI extraction
+    if (text.length > 20) {
+      await ctx.sendChatAction('typing');
+      const parsed = await parseListingWithGroqAI(text);
+
+      if (parsed && parsed.is_listing && parsed.bhk) {
+        session.listingType = parsed.listingType || 'rent';
+        session.bhk = parsed.bhk || '2 BHK';
+        session.location = parsed.location || 'New Town';
+        session.subLocation = parsed.subLocation || '';
+        session.price = Number(parsed.price) || 20000;
+        session.furnishing = parsed.furnishing || 'Semi Furnished';
+        session.userName = parsed.userName || ctx.from.first_name || 'Partner Broker';
+        session.userPhone = parsed.userPhone || '';
+        session.step = 'SEND_PHOTOS';
+
+        const isRent = session.listingType === 'rent';
+        const priceStr = isRent 
+          ? `₹${session.price.toLocaleString('en-IN')}/month` 
+          : `₹${session.price >= 10000000 ? (session.price / 10000000).toFixed(2) + ' Cr' : (session.price / 100000).toFixed(1) + ' L'}`;
+
+        return sendTracked(
+          ctx,
+          `⚡ *AI Instant Listing Parser Detected!*\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `I automatically extracted the following details:\n\n` +
+          `🏷️ *Type:* For ${session.listingType.toUpperCase()}\n` +
+          `🏢 *BHK:* ${session.bhk}\n` +
+          `📍 *Location:* ${session.location} ${session.subLocation ? `(${session.subLocation})` : ''}\n` +
+          `💰 *Price:* ${priceStr}\n` +
+          `🛋️ *Furnishing:* ${session.furnishing}\n` +
+          `👤 *Contact:* ${session.userName} ${session.userPhone ? `(${session.userPhone})` : ''}\n\n` +
+          `📸 *Final Step: Please upload 1 to 5 real photos of the flat directly in this chat:*`,
+          {
+            parse_mode: 'Markdown'
+          }
+        );
+      }
+    }
+
     return showMainMenu(ctx);
   }
 });
