@@ -459,13 +459,11 @@ bot.on('text', async (ctx) => {
     return sendTracked(
       ctx,
       `✅ Contact saved: *${session.userName}*.\n\n` +
-      `📸 *Now, please upload 1 to 5 photos of the flat.*\n\n` +
-      `You can upload photos directly in this chat. When you are done uploading, click the button below or type **/done**.`,
+      `📸 *Now, please upload the real photos of the flat.*\n\n` +
+      `⚠️ *Note:* At least 1 photo is required. Flatzy only publishes genuine photos provided by you.\n` +
+      `You can upload multiple photos in this chat. When you have uploaded all your photos, tap the button below:`,
       {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback('✅ Done Uploading Photos', 'finish_upload')]
-        ])
+        parse_mode: 'Markdown'
       }
     );
   }
@@ -599,8 +597,13 @@ async function handleFinishBrokerKyc(ctx, session) {
 // FINISH PROPERTY LISTING SUBMISSION
 // -------------------------------------------------------------
 async function handleFinishSubmission(ctx, session) {
-  if (session.images.length === 0) {
-    session.images.push('https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?auto=format&fit=crop&w=1200&q=80');
+  // STRICT: Do not add any mock/placeholder image! Require real images from broker
+  if (!session.images || session.images.length === 0) {
+    return sendTracked(
+      ctx,
+      `⚠️ *No Photos Uploaded!*\n\nFlatzy only lists properties with genuine photos taken by the broker/owner.\n\nPlease upload at least 1 real photo of the flat to proceed:`,
+      { parse_mode: 'Markdown' }
+    );
   }
 
   const propId = `prop_tg_${Date.now()}`;
@@ -612,20 +615,20 @@ async function handleFinishSubmission(ctx, session) {
     title: title,
     listing_type: session.listingType,
     bhk: session.bhk,
-    sqft: session.bhk === '1 BHK' ? 650 : session.bhk === '2 BHK' ? 1050 : 1450,
+    sqft: null, // Only real data; no mock/assumed sqft
     posting_date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
     location: session.location,
     sub_location: session.subLocation || session.location,
-    price: Number(session.price) || 20000,
+    price: Number(session.price) || 0,
     security_deposit: isRent ? Number(session.price) * 2 : 0,
     furnishing: session.furnishing,
-    amenities: ['Lift', '24/7 Security', 'Power Backup', 'Water Supply'],
+    amenities: [], // Only genuine amenities; do not inject mock lists
     status: 'pending',        // PENDING ADMIN APPROVAL
     is_verified: false,       // PENDING VERIFICATION
-    broker_name: session.userName || 'Community User',
+    broker_name: session.userName || 'Broker Partner',
     broker_phone: session.userPhone || '',
-    images: session.images,
-    description: `Direct submission via Flatzy Telegram Bot by ${session.userName || 'Owner'}. Contact: ${session.userPhone || 'N/A'}.`,
+    images: session.images,   // ONLY images uploaded by the broker!
+    description: `Submitted via Flatzy Telegram Bot by ${session.userName}. Contact: ${session.userPhone}.`,
     created_at: new Date().toISOString()
   };
 
