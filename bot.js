@@ -25,6 +25,7 @@ const bot = new Telegraf(BOT_TOKEN);
 // User in-memory session store with 3-Day Auto-Expiry & Message Tracking
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const sessions = new Map();
+const photoDebounceTimers = new Map();
 
 function getSession(userId) {
   const existing = sessions.get(userId);
@@ -507,22 +508,35 @@ bot.on('photo', async (ctx) => {
       return handleFinishBrokerKyc(ctx, session);
     }
 
-    // 3. Handle Property Photos
+    // 3. Handle Property Photos (with multi-photo debouncing buffer)
     if (session.step !== 'SEND_PHOTOS') {
       session.step = 'SEND_PHOTOS';
     }
 
     session.images.push(photoUrl);
 
-    await sendTracked(
-      ctx,
-      `📷 Photo ${session.images.length} received! Send more, or tap below when finished:`,
-      {
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback(`✅ Finish & Submit (${session.images.length} photo${session.images.length > 1 ? 's' : ''})`, 'finish_upload')]
-        ])
-      }
-    );
+    // Clear any previous debounce timer for this user
+    if (photoDebounceTimers.has(userId)) {
+      clearTimeout(photoDebounceTimers.get(userId));
+    }
+
+    // Debounce reply by 1.2s so multiple photos sent together result in ONE clean summary reply
+    const timer = setTimeout(async () => {
+      photoDebounceTimers.delete(userId);
+      await sendTracked(
+        ctx,
+        `📷 *${session.images.length} Photo${session.images.length > 1 ? 's' : ''} Received!*\n\n` +
+        `Send more photos, or tap below to submit:`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback(`✅ Finish & Submit (${session.images.length} photo${session.images.length > 1 ? 's' : ''})`, 'finish_upload')]
+          ])
+        }
+      );
+    }, 1200);
+
+    photoDebounceTimers.set(userId, timer);
   } catch (err) {
     console.error('Error receiving photo:', err);
     sendTracked(ctx, '⚠️ Could not save photo. Please try uploading again.');
