@@ -1,5 +1,6 @@
 import { Telegraf, Markup } from 'telegraf';
 import { createClient } from '@supabase/supabase-js';
+import http from 'http';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -350,6 +351,19 @@ async function handleFinishSubmission(ctx, session) {
 }
 
 // -------------------------------------------------------------
+// HTTP HEALTH CHECK SERVER (Required by Render Web Services)
+// -------------------------------------------------------------
+const PORT = process.env.PORT || 3000;
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ status: 'ok', service: 'flatzy-telegram-bot', timestamp: new Date().toISOString() }));
+});
+
+server.listen(PORT, () => {
+  console.log(`🌐 Health check server listening on port ${PORT}`);
+});
+
+// -------------------------------------------------------------
 // LAUNCH BOT
 // -------------------------------------------------------------
 bot.launch()
@@ -361,6 +375,12 @@ bot.launch()
   });
 
 // Graceful shutdown
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGINT', () => {
+  server.close();
+  bot.stop('SIGINT');
+});
+process.once('SIGTERM', () => {
+  server.close();
+  bot.stop('SIGTERM');
+});
 
