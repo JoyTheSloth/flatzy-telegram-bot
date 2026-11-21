@@ -23,31 +23,63 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const bot = new Telegraf(BOT_TOKEN);
 
-// User in-memory session store
+// User in-memory session store with 3-Day Auto-Expiry
+const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const sessions = new Map();
 
 function getSession(userId) {
-  if (!sessions.has(userId)) {
-    sessions.set(userId, {
-      step: 'IDLE',
-      listingType: 'rent',
-      bhk: '2 BHK',
-      location: 'New Town',
-      subLocation: '',
-      price: 0,
-      furnishing: 'Semi Furnished',
-      userName: '',
-      userPhone: '',
-      images: [],
-      description: ''
-    });
+  const existing = sessions.get(userId);
+  if (existing) {
+    // Check if session has expired (older than 3 days)
+    if (Date.now() - existing.lastActivity > THREE_DAYS_MS) {
+      sessions.delete(userId);
+    } else {
+      existing.lastActivity = Date.now();
+      return existing;
+    }
   }
-  return sessions.get(userId);
+
+  const newSession = {
+    step: 'IDLE',
+    listingType: 'rent',
+    bhk: '2 BHK',
+    location: 'New Town',
+    subLocation: '',
+    price: 0,
+    furnishing: 'Semi Furnished',
+    userName: '',
+    userPhone: '',
+    images: [],
+    description: '',
+    createdAt: Date.now(),
+    lastActivity: Date.now(),
+    lastUploadAt: null
+  };
+  sessions.set(userId, newSession);
+  return newSession;
 }
 
 function resetSession(userId) {
   sessions.delete(userId);
 }
+
+// Automatic hourly cleaner: sweeps and purges sessions older than 3 days
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, session] of sessions.entries()) {
+    if (now - session.lastActivity > THREE_DAYS_MS) {
+      sessions.delete(userId);
+    }
+  }
+}, 60 * 60 * 1000);
+
+// -------------------------------------------------------------
+// /cancel or /reset COMMAND
+// -------------------------------------------------------------
+bot.command(['cancel', 'reset'], async (ctx) => {
+  resetSession(ctx.from.id);
+  await ctx.reply('🧹 *Session and upload history cleared!*\n\nType /start whenever you want to submit a new flat.', { parse_mode: 'Markdown' });
+});
 
 // -------------------------------------------------------------
 // /start COMMAND
