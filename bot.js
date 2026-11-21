@@ -555,6 +555,183 @@ bot.action('finish_upload', async (ctx) => {
 });
 
 // -------------------------------------------------------------
+// INSTANT ADMIN EMAIL ALERT ON NEW SUBMISSION (FLAT / BROKER KYC)
+// -------------------------------------------------------------
+async function sendAdminAlertEmail({ type, title, brokerName, brokerPhone, location, price, imagesCount, details }) {
+  try {
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: EMAIL_USER,
+        pass: EMAIL_PASS
+      }
+    });
+
+    const isKyc = type === 'BROKER_KYC';
+    const subject = isKyc 
+      ? `🪪 [NEW BROKER KYC] ${brokerName} submitted Aadhaar partner application!`
+      : `🔔 [NEW FLAT SUBMISSION] ${title} (${location}) submitted by ${brokerName}!`;
+
+    const html = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 650px; margin: 0 auto; padding: 24px; background-color: #0f172a; border-radius: 20px; color: #f8fafc;">
+        <div style="background: linear-gradient(135deg, ${isKyc ? '#7c3aed, #9333ea' : '#0284c7, #2563eb'}); border-radius: 16px; padding: 20px; text-align: center; margin-bottom: 24px;">
+          <h2 style="margin: 0; font-size: 20px; color: white; font-weight: 900;">
+            ${isKyc ? '🪪 New Broker KYC Onboarding' : '🏡 New Property Listing Received'}
+          </h2>
+          <p style="margin: 6px 0 0 0; font-size: 13px; color: rgba(255,255,255,0.85);">
+            Submitted via Flatzy Telegram Bot (@flatzykolkatabot)
+          </p>
+        </div>
+
+        <div style="background: #1e293b; border-radius: 16px; padding: 20px; border: 1px solid #334155; margin-bottom: 24px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <tr>
+              <td style="padding: 8px 0; color: #94a3b8; width: 140px;">Applicant / Partner:</td>
+              <td style="padding: 8px 0; font-weight: 800; color: white;">${brokerName}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #94a3b8;">WhatsApp Phone:</td>
+              <td style="padding: 8px 0; font-weight: bold; color: #38bdf8;">
+                <a href="https://wa.me/${(brokerPhone || '').replace(/\D/g, '')}" style="color: #38bdf8; text-decoration: none;">${brokerPhone}</a>
+              </td>
+            </tr>
+            ${!isKyc ? `
+            <tr>
+              <td style="padding: 8px 0; color: #94a3b8;">Property:</td>
+              <td style="padding: 8px 0; font-weight: bold; color: white;">${title}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #94a3b8;">Location:</td>
+              <td style="padding: 8px 0; color: white;">${location}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #94a3b8;">Price:</td>
+              <td style="padding: 8px 0; font-weight: bold; color: #4ade80;">${price}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #94a3b8;">Genuine Photos:</td>
+              <td style="padding: 8px 0; font-weight: bold; color: #fbbf24;">${imagesCount} photo(s) uploaded</td>
+            </tr>
+            ` : `
+            <tr>
+              <td style="padding: 8px 0; color: #94a3b8;">Verification:</td>
+              <td style="padding: 8px 0; font-weight: bold; color: #a855f7;">Aadhaar Front & Back Uploaded</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #94a3b8;">Agreement:</td>
+              <td style="padding: 8px 0; color: #4ade80;">20% Deal Commission Policy Accepted</td>
+            </tr>
+            `}
+          </table>
+        </div>
+
+        <div style="text-align: center; margin-bottom: 20px;">
+          <a href="https://flatzy.vercel.app" style="display: inline-block; padding: 14px 28px; background: #0284c7; color: white; text-decoration: none; border-radius: 12px; font-weight: 900; font-size: 14px; box-shadow: 0 4px 14px rgba(2,132,199,0.4);">
+            Open Flatzy Admin to Review & Approve →
+          </a>
+        </div>
+
+        <div style="text-align: center; font-size: 11px; color: #64748b; border-top: 1px solid #1e293b; padding-top: 16px;">
+          Instant notification dispatched to flatzykolkata@gmail.com
+        </div>
+      </div>
+    `;
+
+    await transporter.sendMail({
+      from: `"Flatzy Alerts" <${EMAIL_USER}>`,
+      to: EMAIL_USER,
+      subject: subject,
+      html: html
+    });
+    console.log(`📨 Instant Admin Email Alert sent to ${EMAIL_USER} for ${type}`);
+  } catch (err) {
+    console.warn('⚠️ Could not send instant admin alert email:', err.message);
+  }
+}
+
+// -------------------------------------------------------------
+// DAILY CSV DATABASE BACKUP AUTOMATION (Runs every night at 23:59 IST)
+// -------------------------------------------------------------
+async function sendDailyDatabaseBackup() {
+  console.log('💾 Running automated daily database CSV backup...');
+  try {
+    const [{ data: properties }, { data: inquiries }] = await Promise.all([
+      supabase.from('properties').select('*').order('created_at', { ascending: false }),
+      supabase.from('inquiries').select('*').order('created_at', { ascending: false })
+    ]);
+
+    // Build Properties CSV
+    const propHeaders = ['id', 'title', 'listing_type', 'bhk', 'price', 'location', 'status', 'is_verified', 'broker_name', 'broker_phone', 'created_at'];
+    const propRows = (properties || []).map(p => 
+      propHeaders.map(h => `"${String(p[h] ?? '').replace(/"/g, '""')}"`).join(',')
+    );
+    const propertiesCsv = [propHeaders.join(','), ...propRows].join('\n');
+
+    // Build Inquiries CSV
+    const inqHeaders = ['id', 'name', 'phone', 'bhk', 'location', 'budget', 'status', 'is_hot', 'created_at'];
+    const inqRows = (inquiries || []).map(i => 
+      inqHeaders.map(h => `"${String(i[h] ?? '').replace(/"/g, '""')}"`).join(',')
+    );
+    const inquiriesCsv = [inqHeaders.join(','), ...inqRows].join('\n');
+
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: EMAIL_USER,
+        pass: EMAIL_PASS
+      }
+    });
+
+    await transporter.sendMail({
+      from: `"Flatzy Backups" <${EMAIL_USER}>`,
+      to: EMAIL_USER,
+      subject: `💾 [Flatzy Daily Backup] Database CSV Export (${todayStr})`,
+      html: `
+        <div style="font-family: sans-serif; padding: 20px; color: #1e293b;">
+          <h2>📦 Flatzy Automated Daily Data Backup</h2>
+          <p>Attached are the complete offline CSV backups for all properties and client leads as of <strong>${todayStr}</strong>.</p>
+          <ul>
+            <li><strong>Properties Count:</strong> ${(properties || []).length}</li>
+            <li><strong>Inquiries Count:</strong> ${(inquiries || []).length}</li>
+          </ul>
+          <p style="color: #64748b; font-size: 12px;">This backup ensures zero data loss and is retained in your Google mailbox.</p>
+        </div>
+      `,
+      attachments: [
+        {
+          filename: `flatzy_properties_${todayStr}.csv`,
+          content: propertiesCsv,
+          contentType: 'text/csv'
+        },
+        {
+          filename: `flatzy_inquiries_${todayStr}.csv`,
+          content: inquiriesCsv,
+          contentType: 'text/csv'
+        }
+      ]
+    });
+
+    console.log(`✅ Daily database backup CSV sent successfully to ${EMAIL_USER}`);
+  } catch (backupErr) {
+    console.error('❌ Error sending daily database backup:', backupErr);
+  }
+}
+
+// Schedule Daily Backup at 23:59 (Every midnight)
+cron.schedule('59 23 * * *', () => {
+  sendDailyDatabaseBackup();
+});
+
+// Admin manual backup trigger
+bot.command('backup', async (ctx) => {
+  await ctx.reply('⏳ Creating full database CSV backup and sending to flatzykolkata@gmail.com...');
+  await sendDailyDatabaseBackup();
+  await ctx.reply('✅ Database CSV backup files have been dispatched to flatzykolkata@gmail.com!');
+});
+
+// -------------------------------------------------------------
 // FINISH BROKER KYC SUBMISSION
 // -------------------------------------------------------------
 async function handleFinishBrokerKyc(ctx, session) {
@@ -584,6 +761,15 @@ async function handleFinishBrokerKyc(ctx, session) {
     if (error) {
       console.warn('[Broker KYC Insert Warning]:', error.message);
     }
+
+    // Trigger Instant Admin Email Alert
+    sendAdminAlertEmail({
+      type: 'BROKER_KYC',
+      brokerName: session.brokerName,
+      brokerPhone: session.brokerPhone,
+      location: 'Kolkata',
+      details: 'Aadhaar Card Front and Back uploaded with 20% commission policy accepted.'
+    });
 
     await sendTracked(
       ctx,
@@ -657,6 +843,17 @@ async function handleFinishSubmission(ctx, session) {
       console.error('[Supabase Insert Error]:', error);
       return sendTracked(ctx, '⚠️ There was an error submitting your listing. Please try again with /start.');
     }
+
+    // Trigger Instant Admin Email Alert
+    sendAdminAlertEmail({
+      type: 'FLAT_LISTING',
+      title: title,
+      brokerName: session.userName || 'Broker Partner',
+      brokerPhone: session.userPhone || 'N/A',
+      location: session.location,
+      price: `₹${Number(session.price).toLocaleString('en-IN')}${isRent ? '/month' : ''}`,
+      imagesCount: session.images.length
+    });
 
     await sendTracked(
       ctx,
