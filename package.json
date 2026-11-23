@@ -7,12 +7,16 @@
   "scripts": {
     "start": "node bot.js"
   },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
     "dotenv": "^16.4.7",
     "groq-sdk": "^1.6.0",
     "node-cron": "^4.6.0",
     "nodemailer": "^10.6.1",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "ws": "^8.23.0"
   }
 }

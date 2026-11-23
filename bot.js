@@ -1,10 +1,16 @@
 import { Telegraf, Markup } from 'telegraf';
 import { createClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
 import http from 'http';
 import dotenv from 'dotenv';
 import nodemailer from 'nodemailer';
 import cron from 'node-cron';
 import Groq from 'groq-sdk';
+
+// Polyfill native WebSocket for Supabase Realtime when running on older Node versions
+if (!globalThis.WebSocket) {
+  globalThis.WebSocket = WebSocket;
+}
 
 dotenv.config();
 
