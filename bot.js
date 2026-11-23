@@ -168,7 +168,7 @@ async function showMainMenu(ctx) {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
         [
-          Markup.button.callback('📤 Upload Room Listing (1 Photo)', 'btn_upload_room'),
+          Markup.button.callback('📝 Post Room (Text Only)', 'btn_upload_room'),
           Markup.button.callback('📋 View Live Listings', 'btn_view_rooms')
         ],
         [
@@ -528,7 +528,7 @@ bot.on('text', async (ctx) => {
     );
   }
 
-  // Handle Guided Weekly Room text input
+  // Handle Guided Weekly Room text input (Direct Text Posting - No image required)
   if (session.step === 'WEEKLY_ROOM_TEXT') {
     await ctx.sendChatAction('typing');
     const weeklyParsed = await parseWeeklyRoomWithGroq(text);
@@ -538,21 +538,22 @@ bot.on('text', async (ctx) => {
       price_period: weeklyParsed?.price_period || 'per month',
       subtitle: weeklyParsed?.subtitle || '1 BHK, semi-furnished, listed today',
       location: weeklyParsed?.location || 'New Town',
-      image_url: '/properties/shapoorji/living-tv.jpg'
+      image_url: ''
     };
-    session.step = 'WEEKLY_ROOM_PHOTO';
+    session.step = 'IDLE';
 
     return ctx.reply(
-      `📝 *Details Extracted:*\n` +
+      `📝 *Room Details Extracted:*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `🏠 *Title:* ${session.pendingWeeklyRoom.title}\n` +
       `💰 *Price:* ${session.pendingWeeklyRoom.price} (${session.pendingWeeklyRoom.price_period})\n` +
       `📝 *Details:* ${session.pendingWeeklyRoom.subtitle}\n` +
       `📍 *Location:* ${session.pendingWeeklyRoom.location}\n\n` +
-      `📸 *Now, please send exactly 1 image of the room:*`,
+      `👉 *Ready to post to website?*`,
       {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-          [Markup.button.callback('⚡ Use Default Room Image & Post Now', 'confirm_post_weekly_room')],
+          [Markup.button.callback('🚀 Post Immediately to Website', 'confirm_post_weekly_room')],
           [Markup.button.callback('❌ Cancel', 'menu_main')]
         ])
       }
@@ -1376,7 +1377,7 @@ async function listActiveRoomsWithActions(ctx) {
   }
 }
 
-// Button: Upload Room Listing Guided Flow
+// Button: Upload Room Listing Guided Flow (Pure Text - No Image Needed)
 bot.action('btn_upload_room', async (ctx) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
@@ -1384,12 +1385,11 @@ bot.action('btn_upload_room', async (ctx) => {
   await ctx.answerCbQuery();
 
   await ctx.reply(
-    `📤 *Upload Room to "Listed This Week"*\n` +
+    `📝 *Post Room to "Listed This Week"*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `👉 *Step 1:* Paste the listing text in this chat.\n\n` +
+    `👉 Simply paste or type the listing text here.\n\n` +
     `_Example:_\n` +
-    `\`₹14,000 per month. PG in Andheri West. 1 BHK, furnished, listed today.\`\n\n` +
-    `Or you can directly send 1 photo with the text as caption!`,
+    `\`₹14,000 per month. PG in Andheri West. 1 BHK, furnished, listed today.\``,
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
