@@ -523,8 +523,39 @@ bot.on('text', async (ctx) => {
   // Fallback: If user sends raw text when IDLE, try Groq AI One-Shot Parsing!
   if (session.step === 'IDLE') {
     // If text has some length, attempt AI extraction
-    if (text.length > 20) {
+    if (text.length > 10) {
       await ctx.sendChatAction('typing');
+
+      // First check if it's meant for "Rooms Listed This Week"
+      const weeklyParsed = await parseWeeklyRoomWithGroq(text);
+      if (weeklyParsed && (weeklyParsed.price || weeklyParsed.title)) {
+        session.pendingWeeklyRoom = {
+          title: weeklyParsed.title || 'Room in Kolkata',
+          price: weeklyParsed.price || '₹15,000',
+          price_period: weeklyParsed.price_period || 'per month',
+          subtitle: weeklyParsed.subtitle || 'Verified, listed this week',
+          location: weeklyParsed.location || 'New Town',
+          image_url: '/properties/shapoorji/living-tv.jpg'
+        };
+
+        return ctx.reply(
+          `⚡ *Room Listing Detected for Website!*\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `🏠 *Title:* ${session.pendingWeeklyRoom.title}\n` +
+          `💰 *Price:* ${session.pendingWeeklyRoom.price} (${session.pendingWeeklyRoom.price_period})\n` +
+          `📝 *Details:* ${session.pendingWeeklyRoom.subtitle}\n` +
+          `📍 *Location:* ${session.pendingWeeklyRoom.location}\n\n` +
+          `👉 *Choose an action below:*`,
+          {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('🚀 Post Immediately to Website', 'confirm_post_weekly_room')],
+              [Markup.button.callback('❌ Cancel', 'cancel_post_weekly_room')]
+            ])
+          }
+        );
+      }
+
       const parsed = await parseListingWithGroqAI(text);
 
       if (parsed && parsed.is_listing && parsed.bhk) {
@@ -580,7 +611,39 @@ bot.on('photo', async (ctx) => {
     const fileLink = await ctx.telegram.getFileLink(largestPhoto.file_id);
     const photoUrl = fileLink.href;
 
-    // 1. Handle Aadhaar Card Front
+    // Check if user uploaded a photo with caption while IDLE (Instant Weekly Room Post)
+    const caption = ctx.message.caption;
+    if (caption && session.step === 'IDLE') {
+      await ctx.sendChatAction('typing');
+      const weeklyParsed = await parseWeeklyRoomWithGroq(caption);
+      if (weeklyParsed && (weeklyParsed.price || weeklyParsed.title)) {
+        session.pendingWeeklyRoom = {
+          title: weeklyParsed.title || 'Room in Kolkata',
+          price: weeklyParsed.price || '₹15,000',
+          price_period: weeklyParsed.price_period || 'per month',
+          subtitle: weeklyParsed.subtitle || 'Verified, listed this week',
+          location: weeklyParsed.location || 'New Town',
+          image_url: photoUrl
+        };
+
+        return ctx.reply(
+          `📸 *Room Photo & Details Detected!*\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `🏠 *Title:* ${session.pendingWeeklyRoom.title}\n` +
+          `💰 *Price:* ${session.pendingWeeklyRoom.price} (${session.pendingWeeklyRoom.price_period})\n` +
+          `📝 *Details:* ${session.pendingWeeklyRoom.subtitle}\n` +
+          `📍 *Location:* ${session.pendingWeeklyRoom.location}\n\n` +
+          `👉 *Choose an action below:*`,
+          {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('🚀 Post Immediately to Website', 'confirm_post_weekly_room')],
+              [Markup.button.callback('❌ Cancel', 'cancel_post_weekly_room')]
+            ])
+          }
+        );
+      }
+    }
     if (session.step === 'BROKER_AADHAAR_FRONT') {
       session.aadhaarFront = photoUrl;
       session.step = 'BROKER_AADHAAR_BACK';
@@ -1149,6 +1212,157 @@ try {
 } catch (rtErr) {
   console.warn('Realtime listener subscription warning:', rtErr.message);
 }
+
+// -------------------------------------------------------------
+// ADMIN WEEKLY ROOMS AUTOMATION & WEBSITE POSTING
+// -------------------------------------------------------------
+
+// Helper to parse room listing specifically for the Weekly Rooms section
+async function parseWeeklyRoomWithGroq(text) {
+  if (!groq) return null;
+  try {
+    const prompt = `You are an AI assistant for Flatzy Kolkata real estate platform.
+Extract room listing information from this raw text pasted by an admin:
+"${text}"
+
+Return ONLY a valid JSON object with these exact keys:
+{
+  "title": "Title of the room or flat (e.g. PG in Andheri West or 2 BHK in Shapoorji)",
+  "price": "Price amount with rupee symbol (e.g. ₹14,000 or ₹28,000)",
+  "price_period": "per month or per person, per month",
+  "subtitle": "Details like BHK, furnishing, listed recency (e.g. 1 BHK, furnished, listed today)",
+  "location": "Location name (e.g. Shapoorji, New Town, Sector V, etc.)"
+}`;
+
+    const completion = await groq.chat.completions.create({
+      messages: [{ role: 'user', content: prompt }],
+      model: 'llama-3.3-70b-versatile',
+      temperature: 0.1,
+      response_format: { type: 'json_object' }
+    });
+
+    return JSON.parse(completion.choices[0]?.message?.content || '{}');
+  } catch (err) {
+    console.error('Groq AI parse error for weekly room:', err);
+    return null;
+  }
+}
+
+// Command: /rooms or /list - Shows currently live weekly rooms with removal button
+bot.command(['rooms', 'list'], async (ctx) => {
+  try {
+    const { data: rooms, error } = await supabase
+      .from('weekly_rooms')
+      .select('*')
+      .eq('status', 'available')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      return ctx.reply('⚠️ Error fetching weekly rooms from Supabase: ' + error.message);
+    }
+
+    if (!rooms || rooms.length === 0) {
+      return ctx.reply(
+        '📭 *No active listings in "Rooms Listed This Week"*\n\n' +
+        'To post one, simply send me a photo with a caption or paste the room text here!',
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    await ctx.reply(`📋 *Currently Live on Website (${rooms.length} active):*`, { parse_mode: 'Markdown' });
+
+    for (const room of rooms) {
+      const priceText = room.price ? (room.price.startsWith('₹') ? room.price : `₹${room.price}`) : '₹N/A';
+      const msg = 
+        `🏠 *${room.title}*\n` +
+        `💰 *${priceText}* (${room.price_period || 'per month'})\n` +
+        `📝 ${room.subtitle || 'Verified listing'}\n` +
+        `📍 ${room.location || 'Kolkata'}\n` +
+        `🕒 Posted: ${new Date(room.created_at).toLocaleDateString('en-IN')}`;
+
+      await ctx.reply(msg, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('🗑️ Remove from Website', `del_room_${room.id}`)]
+        ])
+      });
+    }
+  } catch (err) {
+    ctx.reply('⚠️ Error: ' + err.message);
+  }
+});
+
+// Action to remove a room posting from the live website
+bot.action(/del_room_(.+)/, async (ctx) => {
+  const roomId = ctx.match[1];
+  try {
+    const { error } = await supabase
+      .from('weekly_rooms')
+      .update({ status: 'archived' })
+      .eq('id', roomId);
+
+    await ctx.answerCbQuery();
+    if (error) {
+      return ctx.reply('⚠️ Failed to remove room: ' + error.message);
+    }
+
+    await ctx.editMessageText(
+      `🗑️ *Removed from Website Successfully!*\nThis room is no longer visible on the live Flatzy homepage.`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    ctx.reply('⚠️ Error removing room: ' + err.message);
+  }
+});
+
+// Confirmation action to post to website
+bot.action('confirm_post_weekly_room', async (ctx) => {
+  const userId = ctx.from.id;
+  const session = getSession(userId);
+  await ctx.answerCbQuery();
+
+  if (!session.pendingWeeklyRoom) {
+    return ctx.reply('⚠️ No pending room to post. Please send the details again.');
+  }
+
+  const room = session.pendingWeeklyRoom;
+  try {
+    const { data, error } = await supabase.from('weekly_rooms').insert([{
+      title: room.title,
+      price: room.price,
+      price_period: room.price_period,
+      subtitle: room.subtitle,
+      location: room.location,
+      image_url: room.image_url || '/properties/shapoorji/living-tv.jpg',
+      status: 'available',
+      created_at: new Date().toISOString()
+    }]);
+
+    if (error) {
+      console.error('Insert error:', error);
+      return ctx.reply('⚠️ Error saving to Supabase: ' + error.message + '\n\nMake sure the `weekly_rooms` table exists.');
+    }
+
+    session.pendingWeeklyRoom = null;
+    await ctx.reply(
+      `🎉 *Posted to Website Successfully!*\n\n` +
+      `It is now live under *"Rooms listed this week."* on the homepage.\n\n` +
+      `Use /rooms anytime to view active listings or remove them.`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    ctx.reply('⚠️ Error posting to website: ' + err.message);
+  }
+});
+
+// Action to cancel pending room
+bot.action('cancel_post_weekly_room', async (ctx) => {
+  const userId = ctx.from.id;
+  const session = getSession(userId);
+  session.pendingWeeklyRoom = null;
+  await ctx.answerCbQuery();
+  await ctx.reply('❌ Posting cancelled.');
+});
 
 // -------------------------------------------------------------
 // HTTP HEALTH CHECK SERVER (Required by Render Web Services)
