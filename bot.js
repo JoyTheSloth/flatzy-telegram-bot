@@ -110,11 +110,25 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 // -------------------------------------------------------------
+// PRICE & TEXT NORMALIZER HELPER
+// Converts shorthand like 23k, 23,000/, 23000 to standard numeric / formatted
+// -------------------------------------------------------------
+function normalizePriceInput(text) {
+  if (!text) return text;
+  // Convert 23k, 23.5k to full numbers
+  return text
+    .replace(/(\d+(?:\.\d+)?)\s*k\b/gi, (_, num) => String(Math.round(parseFloat(num) * 1000)))
+    .replace(/(\d+(?:\.\d+)?)\s*lakh(?:s)?\b/gi, (_, num) => String(Math.round(parseFloat(num) * 100000)))
+    .replace(/(\d+(?:\.\d+)?)\s*cr(?:ore(?:s)?)?\b/gi, (_, num) => String(Math.round(parseFloat(num) * 10000000)));
+}
+
+// -------------------------------------------------------------
 // GROQ AI ONE-SHOT LISTING PARSER
 // Converts raw messy broker text into structured property JSON
 // -------------------------------------------------------------
 async function parseListingWithGroqAI(rawText) {
   try {
+    const normalized = normalizePriceInput(rawText);
     const systemPrompt = `You are an expert real estate data parser for Kolkata, India.
 Given an unstructured property listing from a broker or owner, parse it into JSON with these exact fields:
 {
@@ -122,8 +136,8 @@ Given an unstructured property listing from a broker or owner, parse it into JSO
   "listingType": "rent" or "sale",
   "bhk": "1 BHK", "2 BHK", "3 BHK", or "4+ BHK",
   "location": Kolkata locality, strictly one of: "New Town", "Salt Lake", "Sector V", "Rajarhat", "Shapoorji", "Chinar Park", "Kestopur", "Baguiati", "Dum Dum", "EM Bypass", "Ruby", "Garia", "Bhowanipore", "Behala", "Howrah", or "Other",
-  "subLocation": string (e.g. Action Area 1, Near City Centre 2, Unitech, etc),
-  "price": number (monthly rent or total selling price in INR. E.g. "25k" -> 25000, "65 lakhs" -> 6500000, "1.2 cr" -> 12000000),
+  "subLocation": string (e.g. Action Area 1, Near City Centre 2, Sukhobristi, Unitech, etc),
+  "price": number (monthly rent or total selling price in INR as an integer. Understand shorthands like "23k" -> 23000, "23,000/" -> 23000, "65 lakhs" -> 6500000, "1.2 cr" -> 12000000),
   "furnishing": "Fully Furnished", "Semi Furnished", or "Unfurnished",
   "sqft": number or null,
   "userName": string or null (if contact name mentioned),
@@ -134,7 +148,7 @@ Return ONLY valid JSON. No conversational text or markdown code blocks.`;
     const completion = await groq.chat.completions.create({
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: rawText }
+        { role: 'user', content: normalized }
       ],
       model: 'llama-3.3-70b-versatile',
       temperature: 0.1,
@@ -491,11 +505,12 @@ bot.on('text', async (ctx) => {
 
   // --- PROPERTY LISTING STEPS ---
   if (session.step === 'ENTER_PRICE') {
-    const cleaned = text.replace(/[^0-9]/g, '');
+    const normalizedPriceText = normalizePriceInput(text);
+    const cleaned = normalizedPriceText.replace(/[^0-9]/g, '');
     const price = parseInt(cleaned, 10);
 
     if (isNaN(price) || price <= 0) {
-      return sendTracked(ctx, '⚠️ Please enter a valid numerical amount (e.g. `20000` or `5500000`):', { parse_mode: 'Markdown' });
+      return sendTracked(ctx, '⚠️ Please enter a valid numerical amount (e.g. `23k`, `23000` or `55 lakhs`):', { parse_mode: 'Markdown' });
     }
 
     session.price = price;
@@ -1284,17 +1299,25 @@ try {
 async function parseWeeklyRoomWithGroq(text) {
   if (!groq) return null;
   try {
-    const prompt = `You are an AI assistant for Flatzy Kolkata real estate platform.
-Extract room listing information from this raw text pasted by an admin:
-"${text}"
+    const normalized = normalizePriceInput(text);
+    const prompt = `You are a real estate parser for Flatzy Kolkata.
+Extract room listing information from this raw text (e.g. "23k furnished shapoorji kolkata", "23,000/ 1bhk in shapoorji", "₹14,000 per month. PG in Andheri West"):
+"${normalized}"
 
-Return ONLY a valid JSON object with these exact keys:
+Rules:
+1. "price": Extract the rent amount as a properly formatted Indian Rupee string with the ₹ symbol and thousands separators (e.g. "23k" or "23000" or "23,000/" -> "₹23,000"; "14k" -> "₹14,000"; "8.5k" -> "₹8,500"). Strictly currency symbol and number. Do NOT include words like "per month" or location in the price string.
+2. "price_period": MUST be either "per month" or "per person, per month". Default to "per month".
+3. "title": The clean name of the flat or property (e.g. "Shapoorji Sukhobristi", "1 BHK in Shapoorji", "Unitech Uniworld City"). Do NOT include the price in the title! If the user gives "23k furnished shapoorji kolkata", the title is "Shapoorji Sukhobristi, Kolkata".
+4. "subtitle": Brief features, BHK, furnishing, and recency (e.g. "Furnished flat", "1 BHK, fully furnished, listed today").
+5. "location": Locality name (e.g. "Shapoorji", "New Town", "Salt Lake", "Rajarhat").
+
+Return ONLY valid JSON matching:
 {
-  "title": "Title of the room or flat (e.g. PG in Andheri West or 2 BHK in Shapoorji)",
-  "price": "Price amount with rupee symbol (e.g. ₹14,000 or ₹28,000)",
-  "price_period": "per month or per person, per month",
-  "subtitle": "Details like BHK, furnishing, listed recency (e.g. 1 BHK, furnished, listed today)",
-  "location": "Location name (e.g. Shapoorji, New Town, Sector V, etc.)"
+  "title": "Clean property title without price",
+  "price": "₹XX,XXX",
+  "price_period": "per month",
+  "subtitle": "BHK, furnishing, recency",
+  "location": "Locality name"
 }`;
 
     const completion = await groq.chat.completions.create({
@@ -1304,7 +1327,28 @@ Return ONLY a valid JSON object with these exact keys:
       response_format: { type: 'json_object' }
     });
 
-    return JSON.parse(completion.choices[0]?.message?.content || '{}');
+    const parsed = JSON.parse(completion.choices[0]?.message?.content || '{}');
+
+    // Clean up title in case price was accidentally prepended or retained
+    if (parsed.title) {
+      parsed.title = parsed.title.replace(/^₹?\s*[\d,kK]+(\/|\s*(per\s*month)?)?\s*[.\-:]*\s*/i, '').trim();
+      if (!parsed.title) {
+        parsed.title = `${parsed.location || 'Kolkata'} Flat`;
+      }
+    }
+
+    // Ensure price is properly formatted with ₹ and comma
+    if (parsed.price) {
+      let numericVal = parsed.price.replace(/[^\d.]/g, '');
+      if (numericVal) {
+        const num = Math.round(parseFloat(numericVal));
+        if (!isNaN(num) && num > 0) {
+          parsed.price = `₹${num.toLocaleString('en-IN')}`;
+        }
+      }
+    }
+
+    return parsed;
   } catch (err) {
     console.error('Groq AI parse error for weekly room:', err);
     return null;
