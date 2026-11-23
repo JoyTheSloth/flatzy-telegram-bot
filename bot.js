@@ -1403,14 +1403,24 @@ bot.action('btn_upload_room', async (ctx) => {
 bot.action(/del_room_(.+)/, async (ctx) => {
   const roomId = ctx.match[1];
   try {
+    // Delete the room row directly so it immediately unpublishes
     const { error } = await supabase
       .from('weekly_rooms')
-      .update({ status: 'archived' })
+      .delete()
       .eq('id', roomId);
 
     await ctx.answerCbQuery();
     if (error) {
-      return ctx.reply('⚠️ Failed to remove room: ' + error.message);
+      console.error('Delete room error:', error);
+      // Fallback: try update status to archived if delete policy is restricted
+      const { error: updateErr } = await supabase
+        .from('weekly_rooms')
+        .update({ status: 'archived' })
+        .eq('id', roomId);
+
+      if (updateErr) {
+        return ctx.reply('⚠️ Failed to remove room: ' + (error.message || updateErr.message));
+      }
     }
 
     await ctx.editMessageText(
