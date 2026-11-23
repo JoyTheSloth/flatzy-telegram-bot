@@ -1552,13 +1552,24 @@ server.listen(PORT, () => {
 // -------------------------------------------------------------
 // LAUNCH BOT
 // -------------------------------------------------------------
-bot.launch()
-  .then(() => {
-    console.log('🚀 Flatzy Telegram Bot is online and listening for messages!');
-  })
-  .catch((err) => {
-    console.error('Failed to launch bot:', err);
-  });
+// Auto-retry launch loop so transient network errors or duplicate polling conflicts automatically reconnect
+function startBotWithRetry(retries = 10, delayMs = 5000) {
+  bot.launch()
+    .then(() => {
+      console.log('🚀 Flatzy Telegram Bot is online and listening for messages!');
+    })
+    .catch((err) => {
+      console.error('⚠️ Failed to launch bot:', err.message || err);
+      if (retries > 0) {
+        console.log(`🔄 Retrying bot.launch in ${delayMs / 1000}s... (${retries} retries left)`);
+        setTimeout(() => startBotWithRetry(retries - 1, delayMs), delayMs);
+      } else {
+        console.error('❌ Max retries reached for bot.launch().');
+      }
+    });
+}
+
+startBotWithRetry();
 
 // Graceful shutdown
 process.once('SIGINT', () => {
