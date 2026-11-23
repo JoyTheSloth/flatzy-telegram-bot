@@ -161,16 +161,24 @@ async function showMainMenu(ctx) {
 
   await sendTracked(
     ctx,
-    `🏡 *Welcome to Flatzy Kolkata Official Assistant!*\n\n` +
-    `Flatzy helps you list verified flats and join Kolkata's premier broker network.\n\n` +
-    `💡 *Pro Tip:* You can also **paste a raw WhatsApp property message** directly into this chat anytime, and our AI will automatically parse it!\n\n` +
-    `👉 *What would you like to do?*`,
+    `🏢 *Flatzy Admin & Listing Control*\n\n` +
+    `Manage the *"Rooms listed this week"* section on the website and submit new property listings.\n\n` +
+    `👉 *Select an action below:*`,
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('🏢 List a Flat (Step-by-Step)', 'menu_list_flat')],
-        [Markup.button.callback('🤝 How to Become a Flatzy Broker', 'menu_broker_info')],
-        [Markup.button.callback('🗑️ Clear Chat History', 'menu_clear_confirm')]
+        [
+          Markup.button.callback('📤 Upload Room Listing (1 Photo)', 'btn_upload_room'),
+          Markup.button.callback('📋 View Live Listings', 'btn_view_rooms')
+        ],
+        [
+          Markup.button.callback('🗑️ Delete / Manage Listings', 'btn_manage_delete'),
+          Markup.button.callback('🏢 Submit Full Property', 'menu_list_flat')
+        ],
+        [
+          Markup.button.callback('🤝 Broker KYC', 'menu_broker_info'),
+          Markup.button.callback('🧹 Clear Chat', 'menu_clear_confirm')
+        ]
       ])
     }
   );
@@ -520,6 +528,37 @@ bot.on('text', async (ctx) => {
     );
   }
 
+  // Handle Guided Weekly Room text input
+  if (session.step === 'WEEKLY_ROOM_TEXT') {
+    await ctx.sendChatAction('typing');
+    const weeklyParsed = await parseWeeklyRoomWithGroq(text);
+    session.pendingWeeklyRoom = {
+      title: weeklyParsed?.title || text.slice(0, 40),
+      price: weeklyParsed?.price || '₹15,000',
+      price_period: weeklyParsed?.price_period || 'per month',
+      subtitle: weeklyParsed?.subtitle || '1 BHK, semi-furnished, listed today',
+      location: weeklyParsed?.location || 'New Town',
+      image_url: '/properties/shapoorji/living-tv.jpg'
+    };
+    session.step = 'WEEKLY_ROOM_PHOTO';
+
+    return ctx.reply(
+      `📝 *Details Extracted:*\n` +
+      `🏠 *Title:* ${session.pendingWeeklyRoom.title}\n` +
+      `💰 *Price:* ${session.pendingWeeklyRoom.price} (${session.pendingWeeklyRoom.price_period})\n` +
+      `📝 *Details:* ${session.pendingWeeklyRoom.subtitle}\n` +
+      `📍 *Location:* ${session.pendingWeeklyRoom.location}\n\n` +
+      `📸 *Now, please send exactly 1 image of the room:*`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('⚡ Use Default Room Image & Post Now', 'confirm_post_weekly_room')],
+          [Markup.button.callback('❌ Cancel', 'menu_main')]
+        ])
+      }
+    );
+  }
+
   // Fallback: If user sends raw text when IDLE, try Groq AI One-Shot Parsing!
   if (session.step === 'IDLE') {
     // If text has some length, attempt AI extraction
@@ -610,6 +649,29 @@ bot.on('photo', async (ctx) => {
     const largestPhoto = photos[photos.length - 1];
     const fileLink = await ctx.telegram.getFileLink(largestPhoto.file_id);
     const photoUrl = fileLink.href;
+
+    // Handle photo when waiting for 1 room image
+    if (session.step === 'WEEKLY_ROOM_PHOTO' && session.pendingWeeklyRoom) {
+      session.pendingWeeklyRoom.image_url = photoUrl;
+      session.step = 'IDLE';
+
+      return ctx.reply(
+        `📸 *Image Attached Successfully!*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `🏠 *Title:* ${session.pendingWeeklyRoom.title}\n` +
+        `💰 *Price:* ${session.pendingWeeklyRoom.price} (${session.pendingWeeklyRoom.price_period})\n` +
+        `📝 *Details:* ${session.pendingWeeklyRoom.subtitle}\n` +
+        `📍 *Location:* ${session.pendingWeeklyRoom.location}\n\n` +
+        `👉 *Ready to go live on the website?*`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('🚀 Confirm & Post to Website', 'confirm_post_weekly_room')],
+            [Markup.button.callback('❌ Cancel', 'cancel_post_weekly_room')]
+          ])
+        }
+      );
+    }
 
     // Check if user uploaded a photo with caption while IDLE (Instant Weekly Room Post)
     const caption = ctx.message.caption;
@@ -1248,8 +1310,17 @@ Return ONLY a valid JSON object with these exact keys:
   }
 }
 
-// Command: /rooms or /list - Shows currently live weekly rooms with removal button
+// Command & Button: View & Delete Active Listings
+bot.action(['btn_view_rooms', 'btn_manage_delete'], async (ctx) => {
+  await ctx.answerCbQuery();
+  return listActiveRoomsWithActions(ctx);
+});
+
 bot.command(['rooms', 'list'], async (ctx) => {
+  return listActiveRoomsWithActions(ctx);
+});
+
+async function listActiveRoomsWithActions(ctx) {
   try {
     const { data: rooms, error } = await supabase
       .from('weekly_rooms')
@@ -1264,8 +1335,14 @@ bot.command(['rooms', 'list'], async (ctx) => {
     if (!rooms || rooms.length === 0) {
       return ctx.reply(
         '📭 *No active listings in "Rooms Listed This Week"*\n\n' +
-        'To post one, simply send me a photo with a caption or paste the room text here!',
-        { parse_mode: 'Markdown' }
+        'Tap the button below to upload one now!',
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('📤 Upload a Room Listing (1 Photo)', 'btn_upload_room')],
+            [Markup.button.callback('🔙 Main Menu', 'menu_main')]
+          ])
+        }
       );
     }
 
@@ -1283,13 +1360,43 @@ bot.command(['rooms', 'list'], async (ctx) => {
       await ctx.reply(msg, {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-          [Markup.button.callback('🗑️ Remove from Website', `del_room_${room.id}`)]
+          [Markup.button.callback('🗑️ Delete / Remove from Website', `del_room_${room.id}`)]
         ])
       });
     }
+
+    await ctx.reply('👉 Tap below for more options:', {
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('📤 Upload Another Room', 'btn_upload_room')],
+        [Markup.button.callback('🔙 Main Menu', 'menu_main')]
+      ])
+    });
   } catch (err) {
     ctx.reply('⚠️ Error: ' + err.message);
   }
+}
+
+// Button: Upload Room Listing Guided Flow
+bot.action('btn_upload_room', async (ctx) => {
+  const userId = ctx.from.id;
+  const session = getSession(userId);
+  session.step = 'WEEKLY_ROOM_TEXT';
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    `📤 *Upload Room to "Listed This Week"*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `👉 *Step 1:* Paste the listing text in this chat.\n\n` +
+    `_Example:_\n` +
+    `\`₹14,000 per month. PG in Andheri West. 1 BHK, furnished, listed today.\`\n\n` +
+    `Or you can directly send 1 photo with the text as caption!`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'menu_main')]
+      ])
+    }
+  );
 });
 
 // Action to remove a room posting from the live website
