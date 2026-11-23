@@ -37,6 +37,11 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const bot = new Telegraf(BOT_TOKEN);
 
+// Global error handler to prevent bot from crashing on unexpected Telegram errors
+bot.catch((err, ctx) => {
+  console.error(`⚠️ Error encountered for ${ctx?.updateType || 'unknown update'}:`, err);
+});
+
 // User in-memory session store with 3-Day Auto-Expiry & Message Tracking
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const sessions = new Map();
