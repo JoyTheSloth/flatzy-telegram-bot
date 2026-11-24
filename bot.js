@@ -1370,38 +1370,22 @@ function fallbackParseWeeklyRoom(text) {
 
 async function parseWeeklyRoomWithGroq(text) {
   const fallback = fallbackParseWeeklyRoom(text);
+  // Regex-first: if price, known location, and room type/details were all extracted, skip Groq (0 tokens)
+  const hasDetails = fallback.subtitle && !/^listed today$/i.test(fallback.subtitle);
+  if (fallback.price && fallback.location !== 'Kolkata' && hasDetails) {
+    return fallback;
+  }
   if (!groq) return fallback;
   try {
     const normalized = normalizePriceInput(text);
-    const prompt = `You are a real estate listing parser for Flatzy, a Kolkata rental platform.
-
-Parse this raw broker message into structured JSON:
-"${normalized}"
-
-CRITICAL RULES — read carefully:
-1. "price": Extract ONLY the rent amount as ₹XX,XXX format. 
-   - "23,000 per month" → "₹23,000"
-   - "23k" → "₹23,000"  
-   - "14000" → "₹14,000"
-   - NEVER output ₹15,000 as a default. If you cannot find a price, output null.
-2. "price_period": "per month" always (default).
-3. "title": Location + BHK as a clean property title. NEVER include the price in the title.
-   - "23,000 per month . Shapoorji Kolkata, 2bhk, furnished" → "2 BHK in Shapoorji, Kolkata"
-   - "14k 1bhk salt lake" → "1 BHK in Salt Lake"
-4. "subtitle": BHK type + furnishing + "listed today". Use EXACT words from the message.
-   - "2bhk, furnished" → "2 BHK, furnished, listed today"
-   - "1bhk semi furnished" → "1 BHK, semi-furnished, listed today"
-   - If not mentioned: "Flat available, listed today"
-5. "location": Kolkata locality extracted from text. One of: Shapoorji, New Town, Salt Lake, Rajarhat, Sector V, Chinar Park, Kestopur, Baguiati, EM Bypass, Garia, Howrah. If not found: "New Town".
-
-Return ONLY valid JSON — no markdown, no explanation:
-{
-  "title": "2 BHK in Shapoorji, Kolkata",
-  "price": "₹23,000",
-  "price_period": "per month",
-  "subtitle": "2 BHK, furnished, listed today",
-  "location": "Shapoorji"
-}`;
+    const prompt = `Parse this Kolkata rental listing into JSON: "${normalized}"
+Rules:
+- "price": "₹XX,XXX" format (null if missing, never guess ₹15,000)
+- "price_period": "per month" or "per person, per month"
+- "title": "<BHK> in <Location>" without price
+- "subtitle": "<BHK>, <furnishing>, listed today"
+- "location": Kolkata locality (e.g. Shapoorji, New Town, Salt Lake, Rajarhat, Sector V, Chinar Park, Kestopur, Baguiati, EM Bypass, Garia, Howrah)
+Return ONLY valid JSON.`;
 
     const completion = await groq.chat.completions.create({
       messages: [{ role: 'user', content: prompt }],
