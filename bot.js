@@ -559,11 +559,11 @@ bot.on('text', async (ctx) => {
     await ctx.sendChatAction('typing');
     const weeklyParsed = await parseWeeklyRoomWithGroq(text);
     session.pendingWeeklyRoom = {
-      title: weeklyParsed?.title || text.slice(0, 40),
-      price: weeklyParsed?.price || '₹15,000',
+      title: weeklyParsed?.title || text.slice(0, 50),
+      price: weeklyParsed?.price || '₹0',
       price_period: weeklyParsed?.price_period || 'per month',
-      subtitle: weeklyParsed?.subtitle || '1 BHK, semi-furnished, listed today',
-      location: weeklyParsed?.location || 'New Town',
+      subtitle: weeklyParsed?.subtitle || 'Listed today',
+      location: weeklyParsed?.location || 'Kolkata',
       image_url: ''
     };
     session.step = 'IDLE';
@@ -597,10 +597,10 @@ bot.on('text', async (ctx) => {
       if (weeklyParsed && (weeklyParsed.price || weeklyParsed.title)) {
         session.pendingWeeklyRoom = {
           title: weeklyParsed.title || 'Room in Kolkata',
-          price: weeklyParsed.price || '₹15,000',
+          price: weeklyParsed.price || '₹0',
           price_period: weeklyParsed.price_period || 'per month',
           subtitle: weeklyParsed.subtitle || 'Verified, listed this week',
-          location: weeklyParsed.location || 'New Town',
+          location: weeklyParsed.location || 'Kolkata',
           image_url: '/properties/shapoorji/living-tv.jpg'
         };
 
@@ -1307,28 +1307,100 @@ try {
 // -------------------------------------------------------------
 
 // Helper to parse room listing specifically for the Weekly Rooms section
+function fallbackParseWeeklyRoom(text) {
+  const normalized = normalizePriceInput(text);
+
+  // Extract price (e.g. 23,000 or 23000)
+  let price = null;
+  const priceMatch = normalized.match(/(?:₹|rs\.?|inr)?\s*(\d{1,3}(?:,\d{2,3})+|\d{4,7})\s*(?:\/|-|\s*(?:per\s*month|pm|p\.m\.|only))?/i);
+  if (priceMatch) {
+    const num = parseInt(priceMatch[1].replace(/,/g, ''), 10);
+    if (!isNaN(num) && num >= 1000) {
+      price = `₹${num.toLocaleString('en-IN')}`;
+    }
+  }
+
+  // Extract price_period
+  const isPerPerson = /per\s*person|pg|paying\s*guest|sharing|bed/i.test(text);
+  const price_period = isPerPerson ? 'per person, per month' : 'per month';
+
+  // Extract BHK / room type
+  let bhk = '';
+  const bhkMatch = text.match(/(\d)\s*\+?\s*bhk/i);
+  if (bhkMatch) {
+    bhk = `${bhkMatch[1]} BHK`;
+  } else if (/\bpg\b|paying\s*guest/i.test(text)) {
+    bhk = 'PG';
+  } else if (/studio|1\s*rk/i.test(text)) {
+    bhk = 'Studio / 1 RK';
+  }
+
+  // Extract furnishing
+  let furnishing = '';
+  if (/semi[\s-]*furnished/i.test(text)) {
+    furnishing = 'semi-furnished';
+  } else if (/un[\s-]*furnished/i.test(text)) {
+    furnishing = 'unfurnished';
+  } else if (/fully[\s-]*furnished/i.test(text)) {
+    furnishing = 'fully furnished';
+  } else if (/\bfurnished\b/i.test(text)) {
+    furnishing = 'furnished';
+  }
+
+  // Extract location
+  const knownLocations = [
+    'Shapoorji', 'New Town', 'Newtown', 'Salt Lake', 'Sector V', 'Rajarhat',
+    'Chinar Park', 'Kestopur', 'Baguiati', 'Dum Dum', 'EM Bypass', 'Ruby',
+    'Garia', 'Bhowanipore', 'Behala', 'Howrah', 'Sukhobristi', 'Unitech'
+  ];
+  let location = 'Kolkata';
+  for (const loc of knownLocations) {
+    if (new RegExp(`\\b${loc}\\b`, 'i').test(text)) {
+      location = loc.toLowerCase() === 'newtown' ? 'New Town' : loc;
+      break;
+    }
+  }
+
+  const title = bhk ? `${bhk} in ${location}` : `${location} Flat`;
+  const subtitleParts = [bhk, furnishing, 'listed today'].filter(Boolean);
+  const subtitle = subtitleParts.join(', ');
+
+  return { title, price, price_period, subtitle, location };
+}
+
 async function parseWeeklyRoomWithGroq(text) {
-  if (!groq) return null;
+  const fallback = fallbackParseWeeklyRoom(text);
+  if (!groq) return fallback;
   try {
     const normalized = normalizePriceInput(text);
-    const prompt = `You are a real estate parser for Flatzy Kolkata.
-Extract room listing information from this raw text (e.g. "23k furnished shapoorji kolkata", "23,000/ 1bhk in shapoorji", "₹14,000 per month. PG in Andheri West"):
+    const prompt = `You are a real estate listing parser for Flatzy, a Kolkata rental platform.
+
+Parse this raw broker message into structured JSON:
 "${normalized}"
 
-Rules:
-1. "price": Extract the rent amount as a properly formatted Indian Rupee string with the ₹ symbol and thousands separators (e.g. "23k" or "23000" or "23,000/" -> "₹23,000"; "14k" -> "₹14,000"; "8.5k" -> "₹8,500"). Strictly currency symbol and number. Do NOT include words like "per month" or location in the price string.
-2. "price_period": MUST be either "per month" or "per person, per month". Default to "per month".
-3. "title": The clean name of the flat or property (e.g. "Shapoorji Sukhobristi", "1 BHK in Shapoorji", "Unitech Uniworld City"). Do NOT include the price in the title! If the user gives "23k furnished shapoorji kolkata", the title is "Shapoorji Sukhobristi, Kolkata".
-4. "subtitle": Brief features, BHK, furnishing, and recency (e.g. "Furnished flat", "1 BHK, fully furnished, listed today").
-5. "location": Locality name (e.g. "Shapoorji", "New Town", "Salt Lake", "Rajarhat").
+CRITICAL RULES — read carefully:
+1. "price": Extract ONLY the rent amount as ₹XX,XXX format. 
+   - "23,000 per month" → "₹23,000"
+   - "23k" → "₹23,000"  
+   - "14000" → "₹14,000"
+   - NEVER output ₹15,000 as a default. If you cannot find a price, output null.
+2. "price_period": "per month" always (default).
+3. "title": Location + BHK as a clean property title. NEVER include the price in the title.
+   - "23,000 per month . Shapoorji Kolkata, 2bhk, furnished" → "2 BHK in Shapoorji, Kolkata"
+   - "14k 1bhk salt lake" → "1 BHK in Salt Lake"
+4. "subtitle": BHK type + furnishing + "listed today". Use EXACT words from the message.
+   - "2bhk, furnished" → "2 BHK, furnished, listed today"
+   - "1bhk semi furnished" → "1 BHK, semi-furnished, listed today"
+   - If not mentioned: "Flat available, listed today"
+5. "location": Kolkata locality extracted from text. One of: Shapoorji, New Town, Salt Lake, Rajarhat, Sector V, Chinar Park, Kestopur, Baguiati, EM Bypass, Garia, Howrah. If not found: "New Town".
 
-Return ONLY valid JSON matching:
+Return ONLY valid JSON — no markdown, no explanation:
 {
-  "title": "Clean property title without price",
-  "price": "₹XX,XXX",
+  "title": "2 BHK in Shapoorji, Kolkata",
+  "price": "₹23,000",
   "price_period": "per month",
-  "subtitle": "BHK, furnishing, recency",
-  "location": "Locality name"
+  "subtitle": "2 BHK, furnished, listed today",
+  "location": "Shapoorji"
 }`;
 
     const completion = await groq.chat.completions.create({
@@ -1340,29 +1412,35 @@ Return ONLY valid JSON matching:
 
     const parsed = JSON.parse(completion.choices[0]?.message?.content || '{}');
 
-    // Clean up title in case price was accidentally prepended or retained
+    // Clean up title: only strip leading ₹price if it's the entire title (not partial)
     if (parsed.title) {
-      parsed.title = parsed.title.replace(/^₹?\s*[\d,kK]+(\/|\s*(per\s*month)?)?\s*[.\-:]*\s*/i, '').trim();
-      if (!parsed.title) {
-        parsed.title = `${parsed.location || 'Kolkata'} Flat`;
-      }
+      const cleaned = parsed.title.replace(/^₹\s*[\d,]+\s*(per\s*month)?\s*[.\-:]*\s*/i, '').trim();
+      parsed.title = cleaned || fallback.title;
+    } else {
+      parsed.title = fallback.title;
     }
 
     // Ensure price is properly formatted with ₹ and comma
     if (parsed.price) {
-      let numericVal = parsed.price.replace(/[^\d.]/g, '');
+      let numericVal = String(parsed.price).replace(/[^\d.]/g, '');
       if (numericVal) {
         const num = Math.round(parseFloat(numericVal));
         if (!isNaN(num) && num > 0) {
           parsed.price = `₹${num.toLocaleString('en-IN')}`;
         }
       }
+    } else {
+      parsed.price = fallback.price;
     }
+
+    parsed.price_period = parsed.price_period || fallback.price_period;
+    parsed.subtitle = parsed.subtitle || fallback.subtitle;
+    parsed.location = parsed.location || fallback.location;
 
     return parsed;
   } catch (err) {
     console.error('Groq AI parse error for weekly room:', err);
-    return null;
+    return fallback;
   }
 }
 
