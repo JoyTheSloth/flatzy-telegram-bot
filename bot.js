@@ -21,6 +21,16 @@ const EMAIL_USER = process.env.EMAIL_USER || 'joydeepsuper50@gmail.com';
 const EMAIL_PASS = process.env.EMAIL_PASS;
 const ADMIN_NOTIFICATION_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL || 'joydeepdasofficial2003@gmail.com';
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const ADMIN_IDS = new Set(
+  (process.env.ADMIN_IDS || '5691910977')
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean)
+);
+
+function isAdmin(ctx) {
+  return ADMIN_IDS.has(String(ctx.from?.id || ''));
+}
 
 const groq = GROQ_API_KEY ? new Groq({ apiKey: GROQ_API_KEY }) : null;
 
@@ -202,6 +212,9 @@ async function showMainMenu(ctx) {
         ],
         [
           Markup.button.callback('🤝 Broker KYC', 'menu_broker_info'),
+          Markup.button.callback('📊 Stats', 'btn_stats')
+        ],
+        [
           Markup.button.callback('🧹 Clear Chat', 'menu_clear_confirm')
         ]
       ])
@@ -556,6 +569,10 @@ bot.on('text', async (ctx) => {
 
   // Handle Guided Weekly Room text input (Direct Text Posting - No image required)
   if (session.step === 'WEEKLY_ROOM_TEXT') {
+    if (!isAdmin(ctx)) {
+      session.step = 'IDLE';
+      return ctx.reply('⛔ Admin access only.');
+    }
     await ctx.sendChatAction('typing');
     const weeklyParsed = await parseWeeklyRoomWithGroq(text);
     session.pendingWeeklyRoom = {
@@ -568,22 +585,40 @@ bot.on('text', async (ctx) => {
     };
     session.step = 'IDLE';
 
-    return ctx.reply(
-      `📝 *Room Details Extracted:*\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `🏠 *Title:* ${session.pendingWeeklyRoom.title}\n` +
-      `💰 *Price:* ${session.pendingWeeklyRoom.price} (${session.pendingWeeklyRoom.price_period})\n` +
-      `📝 *Details:* ${session.pendingWeeklyRoom.subtitle}\n` +
-      `📍 *Location:* ${session.pendingWeeklyRoom.location}\n\n` +
-      `👉 *Ready to post to website?*`,
-      {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback('🚀 Post Immediately to Website', 'confirm_post_weekly_room')],
-          [Markup.button.callback('❌ Cancel', 'menu_main')]
-        ])
+    return sendWeeklyRoomPreview(ctx, session.pendingWeeklyRoom);
+  }
+
+  // Handle Editing Pending Weekly Room (e.g. "price: 22000" or "location: Salt Lake")
+  if (session.step === 'WEEKLY_ROOM_EDIT' && session.pendingWeeklyRoom) {
+    if (!isAdmin(ctx)) {
+      session.step = 'IDLE';
+      return ctx.reply('⛔ Admin access only.');
+    }
+    const fieldMatch = text.match(/^(title|price|location|subtitle|details)\s*[:\-]\s*(.+)$/i);
+    if (fieldMatch) {
+      const key = fieldMatch[1].toLowerCase();
+      let val = fieldMatch[2].trim();
+      if (key === 'price') {
+        const norm = normalizePriceInput(val).replace(/[^\d]/g, '');
+        if (norm) val = `₹${parseInt(norm, 10).toLocaleString('en-IN')}`;
+        session.pendingWeeklyRoom.price = val;
+      } else if (key === 'details' || key === 'subtitle') {
+        session.pendingWeeklyRoom.subtitle = val;
+      } else {
+        session.pendingWeeklyRoom[key] = val;
       }
-    );
+    } else {
+      const reParsed = await parseWeeklyRoomWithGroq(text);
+      session.pendingWeeklyRoom = {
+        ...session.pendingWeeklyRoom,
+        title: reParsed?.title || session.pendingWeeklyRoom.title,
+        price: reParsed?.price || session.pendingWeeklyRoom.price,
+        subtitle: reParsed?.subtitle || session.pendingWeeklyRoom.subtitle,
+        location: reParsed?.location || session.pendingWeeklyRoom.location
+      };
+    }
+    session.step = 'IDLE';
+    return sendWeeklyRoomPreview(ctx, session.pendingWeeklyRoom);
   }
 
   // Fallback: If user sends raw text when IDLE, try Groq AI One-Shot Parsing!
@@ -1428,13 +1463,100 @@ Return ONLY valid JSON.`;
   }
 }
 
+function sendWeeklyRoomPreview(ctx, room) {
+  const photoStatus = room.image_url ? '✅ Custom photo attached' : '🖼️ Default photo';
+  return ctx.reply(
+    `📝 *Room Details Extracted:*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🏠 *Title:* ${room.title}\n` +
+    `💰 *Price:* ${room.price} (${room.price_period})\n` +
+    `📝 *Details:* ${room.subtitle}\n` +
+    `📍 *Location:* ${room.location}\n` +
+    `📸 *Photo:* ${photoStatus}\n\n` +
+    `👉 *Ready to post to website?*`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('🚀 Post Immediately to Website', 'confirm_post_weekly_room')],
+        [
+          Markup.button.callback('✏️ Edit Details', 'edit_weekly_room'),
+          Markup.button.callback('📸 Add Photo', 'add_photo_weekly_room')
+        ],
+        [Markup.button.callback('❌ Cancel', 'cancel_post_weekly_room')]
+      ])
+    }
+  );
+}
+
+// Edit & Add Photo actions for pending weekly room
+bot.action('edit_weekly_room', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!isAdmin(ctx)) return ctx.reply('⛔ Admin access only.');
+  const session = getSession(ctx.from.id);
+  if (!session.pendingWeeklyRoom) {
+    return ctx.reply('⚠️ No pending room to edit. Send the listing text again.');
+  }
+  session.step = 'WEEKLY_ROOM_EDIT';
+  return ctx.reply(
+    `✏️ *Edit Room Details*\n\n` +
+    `Reply with the field you want to change, e.g.:\n` +
+    `• \`price: 22000\`\n` +
+    `• \`title: 2 BHK in Shapoorji\`\n` +
+    `• \`location: New Town\`\n` +
+    `• \`subtitle: 2 BHK, fully furnished\`\n\n` +
+    `_Or paste the full corrected text._`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+bot.action('add_photo_weekly_room', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!isAdmin(ctx)) return ctx.reply('⛔ Admin access only.');
+  const session = getSession(ctx.from.id);
+  if (!session.pendingWeeklyRoom) {
+    return ctx.reply('⚠️ No pending room. Send the listing text first.');
+  }
+  session.step = 'WEEKLY_ROOM_PHOTO';
+  return ctx.reply('📸 *Send 1 photo* of the room now to attach it to this listing:', { parse_mode: 'Markdown' });
+});
+
+// Stats Dashboard Command & Button
+async function showBotStats(ctx) {
+  if (!isAdmin(ctx)) return ctx.reply('⛔ Admin access only.');
+  try {
+    const [weeklyRes, propRes, brokerRes] = await Promise.all([
+      supabase.from('weekly_rooms').select('id', { count: 'exact', head: true }).eq('status', 'available'),
+      supabase.from('properties').select('id', { count: 'exact', head: true }),
+      supabase.from('brokers').select('id', { count: 'exact', head: true })
+    ]);
+    return ctx.reply(
+      `📊 *Flatzy Live Stats*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🛏️ *Active Weekly Rooms:* ${weeklyRes.count ?? 0}\n` +
+      `🏢 *Total Properties:* ${propRes.count ?? 0}\n` +
+      `🤝 *Registered Brokers:* ${brokerRes.count ?? 0}`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    return ctx.reply('⚠️ Failed to fetch stats: ' + err.message);
+  }
+}
+
+bot.command('stats', showBotStats);
+bot.action('btn_stats', async (ctx) => {
+  await ctx.answerCbQuery();
+  return showBotStats(ctx);
+});
+
 // Command & Button: View & Delete Active Listings
 bot.action(['btn_view_rooms', 'btn_manage_delete'], async (ctx) => {
   await ctx.answerCbQuery();
+  if (!isAdmin(ctx)) return ctx.reply('⛔ Admin access only.');
   return listActiveRoomsWithActions(ctx);
 });
 
 bot.command(['rooms', 'list'], async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('⛔ Admin access only.');
   return listActiveRoomsWithActions(ctx);
 });
 
@@ -1518,6 +1640,10 @@ bot.action('btn_upload_room', async (ctx) => {
 
 // Action to remove a room posting from the live website
 bot.action(/del_room_(.+)/, async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.answerCbQuery('⛔ Admin access only', { show_alert: true });
+    return;
+  }
   const roomId = ctx.match[1];
   try {
     // Delete the room row directly so it immediately unpublishes
@@ -1554,6 +1680,7 @@ bot.action('confirm_post_weekly_room', async (ctx) => {
   const userId = ctx.from.id;
   const session = getSession(userId);
   await ctx.answerCbQuery();
+  if (!isAdmin(ctx)) return ctx.reply('⛔ Admin access only.');
 
   if (!session.pendingWeeklyRoom) {
     return ctx.reply('⚠️ No pending room to post. Please send the details again.');
