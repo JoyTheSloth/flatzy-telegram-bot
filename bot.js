@@ -1537,39 +1537,42 @@ bot.action('cancel_post_weekly_room', async (ctx) => {
 });
 
 // -------------------------------------------------------------
-// HTTP HEALTH CHECK SERVER (Required by Render Web Services)
+// HTTP SERVER WITH WEBHOOK & HEALTH CHECK (Zero-Conflict Architecture)
 // -------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
+
+// Webhook callback handler created by Telegraf
+const webhookCallback = bot.webhookCallback('/webhook');
+
 const server = http.createServer((req, res) => {
+  // 1. Telegram Webhook Endpoint
+  if (req.url === '/webhook' && req.method === 'POST') {
+    return webhookCallback(req, res);
+  }
+
+  // 2. Health Check Endpoint for Render & Uptime Monitors
   res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ status: 'ok', service: 'flatzy-telegram-bot', timestamp: new Date().toISOString() }));
+  res.end(JSON.stringify({ 
+    status: 'ok', 
+    service: 'flatzy-telegram-bot', 
+    mode: 'webhook',
+    timestamp: new Date().toISOString() 
+  }));
 });
 
-server.listen(PORT, () => {
-  console.log(`🌐 Health check server listening on port ${PORT}`);
+server.listen(PORT, async () => {
+  console.log(`🌐 Flatzy server listening on port ${PORT}`);
+  
+  // Automatically register webhook with Telegram
+  const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://flatzy-telegram-bot.onrender.com';
+  const targetWebhookUrl = `${RENDER_EXTERNAL_URL}/webhook`;
+  try {
+    await bot.telegram.setWebhook(targetWebhookUrl);
+    console.log(`🚀 Webhook successfully registered with Telegram: ${targetWebhookUrl}`);
+  } catch (whErr) {
+    console.error('⚠️ Failed to set webhook on startup:', whErr.message);
+  }
 });
-
-// -------------------------------------------------------------
-// LAUNCH BOT
-// -------------------------------------------------------------
-// Auto-retry launch loop so transient network errors or duplicate polling conflicts automatically reconnect
-function startBotWithRetry(retries = 10, delayMs = 5000) {
-  bot.launch()
-    .then(() => {
-      console.log('🚀 Flatzy Telegram Bot is online and listening for messages!');
-    })
-    .catch((err) => {
-      console.error('⚠️ Failed to launch bot:', err.message || err);
-      if (retries > 0) {
-        console.log(`🔄 Retrying bot.launch in ${delayMs / 1000}s... (${retries} retries left)`);
-        setTimeout(() => startBotWithRetry(retries - 1, delayMs), delayMs);
-      } else {
-        console.error('❌ Max retries reached for bot.launch().');
-      }
-    });
-}
-
-startBotWithRetry();
 
 // Graceful shutdown
 process.once('SIGINT', () => {
