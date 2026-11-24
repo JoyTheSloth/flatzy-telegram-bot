@@ -1574,12 +1574,12 @@ server.listen(PORT, async () => {
   }
 });
 
-// Graceful shutdown
+// Graceful shutdown — webhook mode: only close HTTP server (bot was never launch()ed)
 process.once('SIGINT', () => {
-  try { server.close(); } catch (e) {}
-  try { bot.stop('SIGINT'); } catch (e) {}
+  console.log('🛑 SIGINT received, shutting down...');
+  server.close(() => console.log('✅ Server closed.'));
 });
 process.once('SIGTERM', () => {
-  try { server.close(); } catch (e) {}
-  try { bot.stop('SIGTERM'); } catch (e) {}
+  console.log('🛑 SIGTERM received, shutting down...');
+  server.close(() => console.log('✅ Server closed.'));
 });
