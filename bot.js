@@ -1573,10 +1573,10 @@ startBotWithRetry();
 
 // Graceful shutdown
 process.once('SIGINT', () => {
-  server.close();
-  bot.stop('SIGINT');
+  try { server.close(); } catch (e) {}
+  try { bot.stop('SIGINT'); } catch (e) {}
 });
 process.once('SIGTERM', () => {
-  server.close();
-  bot.stop('SIGTERM');
+  try { server.close(); } catch (e) {}
+  try { bot.stop('SIGTERM'); } catch (e) {}
 });
